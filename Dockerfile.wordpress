@@ -1,0 +1,75 @@
+# =============================================================================
+# WordPress Application Image
+# Built on top of php-base-image
+# =============================================================================
+# Build:
+#   docker build \
+#     --build-arg PHP_BASE_TAG=8.3 \
+#     -f Dockerfile.wordpress -t my-wordpress .
+# =============================================================================
+
+ARG BASE_IMAGE=achelesstech/wordpress-nginx-base:php8.4-latest
+FROM ${BASE_IMAGE} AS base
+ENV NGINX_PROFILE=generic
+
+# The base image must have been built with:
+#   --build-arg INSTALL_MYSQL=true
+#   --build-arg INSTALL_IMAGEMAGICK=true     (recommended)
+#   --build-arg APP_PUBLIC_DIR=""             (WP serves from root)
+
+USER root
+
+WORKDIR /var/www/html
+
+# ── Download WordPress core ──────────────────────────────────────────────────
+ARG WP_VERSION=latest
+ARG WP_LOCALE=en_US
+
+RUN apk add --no-cache less  # WP-CLI pager
+RUN curl -sSL https://wordpress.org/wordpress-${WP_VERSION}.tar.gz \
+    | tar -xzC /tmp \
+    && cp -a /tmp/wordpress/. /var/www/html/ \
+    && rm -rf /tmp/wordpress
+
+# ── Install WP-CLI ───────────────────────────────────────────────────────────
+RUN curl -sSL https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar \
+    -o /usr/local/bin/wp \
+    && chmod +x /usr/local/bin/wp
+
+# ── Copy custom themes/plugins from build context ────────────────────────────
+# Uncomment and adjust as needed:
+# COPY --chown=www-data:www-data wp-content/themes/  /var/www/html/wp-content/themes/
+# COPY --chown=www-data:www-data wp-content/plugins/ /var/www/html/wp-content/plugins/
+
+# ── WordPress-specific entrypoint hook ───────────────────────────────────────
+RUN cat <<'WP_INIT' > /docker-entrypoint.d/10-wordpress.sh
+#!/bin/sh
+set -e
+cd "${APP_ROOT}"
+
+# Ensure writable dirs
+for dir in wp-content/uploads wp-content/cache wp-content/upgrade; do
+    mkdir -p "$dir"
+done
+chown -R www-data:www-data wp-content
+chmod -R 775 wp-content/uploads wp-content/cache wp-content/upgrade
+
+# Generate wp-config.php from env if it doesn't exist
+if [ ! -f wp-config.php ] && [ -n "${WORDPRESS_DB_HOST:-}" ]; then
+    echo "[wordpress] Generating wp-config.php from environment"
+    wp config create \
+        --dbname="${WORDPRESS_DB_NAME:-wordpress}" \
+        --dbuser="${WORDPRESS_DB_USER:-root}" \
+        --dbpass="${WORDPRESS_DB_PASSWORD:-}" \
+        --dbhost="${WORDPRESS_DB_HOST}" \
+        --dbprefix="${WORDPRESS_TABLE_PREFIX:-wp_}" \
+        --skip-check \
+        --allow-root 2>/dev/null || true
+fi
+WP_INIT
+chmod +x /docker-entrypoint.d/10-wordpress.sh
+
+# ── Fix ownership ────────────────────────────────────────────────────────────
+RUN chown -R www-data:www-data /var/www/html
+
+USER www-data

@@ -1,0 +1,54 @@
+# =============================================================================
+# .dockerignore — PHP Base Image
+# =============================================================================
+
+# VCS
+.git
+.gitignore
+.gitattributes
+
+# CI/CD
+.github
+.gitlab-ci.yml
+.circleci
+Jenkinsfile
+
+# Docker
+docker-compose*.yml
+Dockerfile.*
+!Dockerfile
+
+# Documentation
+*.md
+!README.md
+LICENSE
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+tests/
+phpunit.xml
+phpunit.xml.dist
+phpstan.neon
+.phpcs.xml
+
+# Node (if accidentally present)
+node_modules
+npm-debug.log
+
+# Logs
+*.log
+
+# Environment files
+.env
+.env.*
+!.env.example

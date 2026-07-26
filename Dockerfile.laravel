@@ -1,0 +1,108 @@
+# =============================================================================
+# Laravel Application Image — built on php-base-image
+# =============================================================================
+# Laravel 13 requires PHP >= 8.3; patch releases from 13.3 pull Symfony 8
+# components that require PHP 8.4 — build the base on PHP 8.4.
+#
+# Base image build requirements (see Makefile `build-laravel`):
+#   INSTALL_MYSQL / INSTALL_POSTGRESQL, INSTALL_REDIS, APP_PUBLIC_DIR=public
+#
+# One configurable base ref (the old file mixed three different registries):
+#   docker build --build-arg BASE_IMAGE=achelesstech/laravel-nginx-base:php8.4-latest ...
+# =============================================================================
+
+ARG BASE_IMAGE=achelesstech/laravel-nginx-base:php8.4-latest
+FROM ${BASE_IMAGE} AS base
+
+# =============================================================================
+# Stage 1: Install dependencies
+# =============================================================================
+FROM base AS deps
+
+USER root
+
+# Node.js for asset compilation (Vite)
+RUN apk add --no-cache nodejs npm
+
+USER www-data
+
+WORKDIR /var/www/html
+
+# Composer deps (cached layer). No autoloader yet — it is dumped optimized in
+# the assets stage once the full source is present (the old file passed the
+# contradictory --no-autoloader + --optimize-autoloader pair).
+COPY --chown=www-data:www-data composer.json composer.lock ./
+RUN composer install \
+    --no-dev \
+    --no-interaction \
+    --no-scripts \
+    --no-autoloader \
+    --prefer-dist
+
+# Node deps (cached layer). --production=false is deprecated npm syntax.
+COPY --chown=www-data:www-data package.json package-lock.json* ./
+RUN npm ci --include=dev
+
+# =============================================================================
+# Stage 2: Build assets
+# =============================================================================
+FROM deps AS assets
+
+COPY --chown=www-data:www-data . .
+
+# Generate the optimized autoloader with full source present
+RUN composer dump-autoload --optimize --classmap-authoritative
+
+# Build frontend
+RUN npm run build
+
+# =============================================================================
+# Stage 3: Production image
+# =============================================================================
+FROM base AS production
+
+ENV NGINX_PROFILE=laravel
+
+WORKDIR /var/www/html
+
+COPY --from=assets --chown=www-data:www-data /var/www/html /var/www/html
+
+# Remove dev files from the final image
+RUN rm -rf node_modules tests .env.example \
+    && rm -rf .git .github .gitlab-ci.yml \
+    && rm -f phpunit.xml phpstan.neon
+
+# Laravel-specific init hook (runs as www-data at container start)
+USER root
+RUN cat <<'LARAVEL_INIT' > /docker-entrypoint.d/10-laravel.sh
+#!/bin/sh
+set -e
+
+cd "${APP_ROOT}"
+
+# ── Directory setup (no DB needed) ──
+for dir in storage/framework/cache storage/framework/sessions \
+           storage/framework/views storage/logs bootstrap/cache; do
+    mkdir -p "$dir"
+done
+
+# Hooks run as www-data: chown/chmod are no-ops on image-owned files but can
+# fail on bind mounts owned by another uid — never let that kill startup.
+chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || true
+chmod -R 775 storage bootstrap/cache 2>/dev/null || true
+
+# Public storage symlink (idempotent; ignore if disk not configured)
+php artisan storage:link 2>/dev/null || true
+
+# ── Cache config/routes/views (no DB needed) ──
+if [ "${APP_ENV:-production}" = "production" ]; then
+    echo "[laravel] Caching config, routes, views, events..."
+    php artisan config:cache
+    # route:cache hard-fails on closure routes — warn loudly, don't crash
+    php artisan route:cache || echo "[laravel] WARNING: route:cache failed (closure routes?) — continuing uncached"
+    php artisan view:cache
+    php artisan event:cache
+fi
+LARAVEL_INIT
+RUN chmod +x /docker-entrypoint.d/10-laravel.sh
+USER www-data

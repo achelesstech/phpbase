@@ -1,0 +1,152 @@
+# =============================================================================
+# Moodle Application Image — built on php-base-image
+# =============================================================================
+# Targets Moodle 5.1+ (min PHP 8.2; 8.3/8.4 supported — build base on 8.4).
+#
+# Moodle 5.1 restructure: web-served code lives in /public and ONLY /public
+# may be the nginx docroot; config.php sits at the install root, outside the
+# web root. APP_PUBLIC_DIR=public + NGINX_PROFILE=moodle handle this.
+# The sodium extension Moodle requires ships enabled in php:fpm-alpine.
+# XML-RPC is no longer required by Moodle and has been dropped from the base.
+#
+# Base image build requirements (see Makefile `build-moodle`):
+#   INSTALL_MYSQL / INSTALL_POSTGRESQL, INSTALL_SOAP=true, INSTALL_INTL=true
+#   optional: INSTALL_LDAP, INSTALL_PSPELL, INSTALL_GHOSTSCRIPT, INSTALL_GRAPHVIZ
+#   PHP_MEMORY_LIMIT=512M, PHP_MAX_INPUT_VARS >= 5000
+# =============================================================================
+
+ARG BASE_IMAGE=achelesstech/moodle-nginx-base:php8.4-latest
+FROM ${BASE_IMAGE}
+
+ENV NGINX_PROFILE=moodle \
+    APP_PUBLIC_DIR=public
+
+USER root
+WORKDIR /var/www/html
+
+# ── Download Moodle (release tarball: smaller/faster than a git clone, no git
+#    needed in the image; MOODLE_BRANCH: 501 = 5.1.x, 500 = 5.0.x, …) ─────────
+ARG MOODLE_BRANCH=501
+RUN set -eux; \
+    curl -fsSL "https://packaging.moodle.org/stable${MOODLE_BRANCH}/moodle-latest-${MOODLE_BRANCH}.tgz" \
+        | tar xz --strip-components=1 -C /var/www/html; \
+    chown -R www-data:www-data /var/www/html
+
+# ── Moodle data directory (must be OUTSIDE the install/web root) ────────────
+RUN mkdir -p /var/moodledata && \
+    chown -R www-data:www-data /var/moodledata
+
+# ── Moodle entrypoint hook (runs as www-data at container start) ────────────
+RUN cat <<'MOODLE_INIT' > /docker-entrypoint.d/10-moodle.sh
+#!/bin/sh
+set -e
+
+# Ensure moodledata is writable (guarded: may be a bind mount)
+mkdir -p /var/moodledata/temp /var/moodledata/cache /var/moodledata/sessions 2>/dev/null || true
+chmod -R 775 /var/moodledata 2>/dev/null || true
+
+# CLI script location differs pre/post the 5.1 restructure — detect it
+MOODLE_CLI_DIR="${APP_ROOT}/admin/cli"
+[ -d "$MOODLE_CLI_DIR" ] || MOODLE_CLI_DIR="${APP_ROOT}/public/admin/cli"
+
+# ── Generate config.php from env if missing (lives at the install root,
+#    OUTSIDE the /public web root in Moodle 5.1) ──
+if [ ! -f "${APP_ROOT}/config.php" ] && [ -n "${MOODLE_DB_HOST:-}" ]; then
+    echo "[moodle] Generating config.php from environment"
+
+    # Behind Traefik with TLS termination, sslproxy must be true or Moodle
+    # redirect-loops on its https wwwroot.
+    SSLPROXY="false"
+    [ "${MOODLE_SSLPROXY:-true}" = "true" ] && SSLPROXY="true"
+
+    # lib/setup.php moved under public/ in the 5.1 restructure — detect it
+    SETUP_PATH="lib/setup.php"
+    [ -f "${APP_ROOT}/lib/setup.php" ] || SETUP_PATH="public/lib/setup.php"
+
+    cat > "${APP_ROOT}/config.php" <<MOODLECFG
+<?php
+unset(\$CFG);
+global \$CFG;
+\$CFG = new stdClass();
+
+\$CFG->dbtype    = '${MOODLE_DB_TYPE:-mariadb}';
+\$CFG->dbhost    = '${MOODLE_DB_HOST}';
+\$CFG->dbname    = '${MOODLE_DB_NAME:-moodle}';
+\$CFG->dbuser    = '${MOODLE_DB_USER:-moodle}';
+\$CFG->dbpass    = '${MOODLE_DB_PASSWORD}';
+\$CFG->prefix    = '${MOODLE_DB_PREFIX:-mdl_}';
+
+\$CFG->wwwroot   = '${MOODLE_URL:-http://localhost:8080}';
+\$CFG->dataroot  = '/var/moodledata';
+\$CFG->admin     = 'admin';
+\$CFG->directorypermissions = 02775;
+
+// External reverse proxy (Traefik) terminates TLS in front of this container
+\$CFG->sslproxy = ${SSLPROXY};
+
+// Moodle 5.1+ routing engine — r.php is configured in nginx
+\$CFG->routerconfigured = true;
+
+// Slasharguments: required for Moodle file serving (pluginfile.php URLs)
+\$CFG->slasharguments = true;
+
+// X-Accel-Redirect: nginx serves moodledata files instead of PHP
+\$CFG->xsendfile = 'X-Accel-Redirect';
+\$CFG->xsendfilealiases = [
+    '/dataroot/' => \$CFG->dataroot,
+];
+
+// Cron via CLI only — never web
+\$CFG->cronclionly = true;
+
+// Production hygiene
+\$CFG->debug = 0;
+\$CFG->debugdisplay = 0;
+\$CFG->pathtophp = '/usr/local/bin/php';
+MOODLECFG
+
+    # ── Redis session handler (only if MOODLE_SESSION_HANDLER=redis) ──
+    if [ "${MOODLE_SESSION_HANDLER:-}" = "redis" ]; then
+        cat >> "${APP_ROOT}/config.php" <<REDISCFG
+\\\$CFG->session_handler_class = '\\core\\session\\redis';
+\\\$CFG->session_redis_host = '${MOODLE_SESSION_REDIS_HOST:-redis}';
+\\\$CFG->session_redis_port = ${MOODLE_SESSION_REDIS_PORT:-6379};
+\\\$CFG->session_redis_database = 0;
+\\\$CFG->session_redis_prefix = '${MOODLE_SESSION_REDIS_PREFIX:-mdl_sess_}';
+\\\$CFG->session_redis_acquire_lock_timeout = 120;
+\\\$CFG->session_redis_lock_expire = 7200;
+REDISCFG
+    fi
+
+    echo "require_once(__DIR__ . '/${SETUP_PATH}');" >> "${APP_ROOT}/config.php"
+fi
+
+# ── In-container cron (Moodle requires cron every minute) ──
+# Enable with MOODLE_RUN_CRON=true; alternatively run a compose sidecar.
+if [ "${MOODLE_RUN_CRON:-false}" = "true" ]; then
+    echo "[moodle] Enabling supervised cron runner"
+    cat > /etc/supervisor/conf.d/programs/moodle-cron.conf <<CRONCONF
+[program:moodle-cron]
+command    = /bin/sh -c "sleep 30; while true; do php ${MOODLE_CLI_DIR}/cron.php >/dev/null 2>&1 || true; sleep 60; done"
+autostart  = true
+autorestart = true
+priority   = 20
+stdout_logfile          = /dev/stdout
+stdout_logfile_maxbytes = 0
+stderr_logfile          = /dev/stderr
+stderr_logfile_maxbytes = 0
+CRONCONF
+fi
+
+# Upgrade if requested
+if [ "${RUN_UPGRADE:-false}" = "true" ]; then
+    echo "[moodle] Running CLI upgrade..."
+    php "${MOODLE_CLI_DIR}/upgrade.php" --non-interactive || true
+fi
+MOODLE_INIT
+RUN chmod +x /docker-entrypoint.d/10-moodle.sh
+
+RUN chown -R www-data:www-data /var/www/html
+USER www-data
+
+VOLUME ["/var/moodledata"]

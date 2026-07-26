@@ -1,0 +1,132 @@
+# =============================================================================
+# Production example — Laravel behind an EXTERNAL Traefik reverse proxy
+# =============================================================================
+# * No `ports:` on the app — Traefik reaches it over the shared `proxy`
+#   network on container port 8080. TLS terminates at Traefik.
+# * All secrets come from .env (see .env.example) — nothing committed here.
+# * Shared env via YAML anchor (the old file repeated the same 9 vars x4).
+# * queue/scheduler override CMD (no nginx), so the image HEALTHCHECK that
+#   curls :8080 is replaced with a process-appropriate one.
+# * `version:` key removed — obsolete in Compose v2.
+# =============================================================================
+
+x-app-env: &app-env
+  env_file: .env
+  environment:
+    APP_ENV: production
+    APP_DEBUG: "false"
+    PHP_OPCACHE_VALIDATE_TIMESTAMPS: "0"
+
+x-app-volumes: &app-volumes
+  volumes:
+    - laravel-storage:/var/www/html/storage
+    - laravel-cache:/var/www/html/bootstrap/cache
+
+services:
+  laravel-app:
+    build:
+      context: .
+      dockerfile: Dockerfile.laravel
+      args:
+        BASE_IMAGE: achelesstech/laravel-nginx-base:php8.4-latest
+    image: achelesstech/laravel-app:php8.4-latest
+    restart: unless-stopped
+    <<: [*app-env, *app-volumes]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - proxy
+      - internal
+    labels:
+      # Traefik config is managed externally — adjust router name/rule there
+      # or via these labels if you use the docker provider:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+      - traefik.http.services.laravel-app.loadbalancer.server.port=8080
+      # - traefik.http.routers.laravel-app.rule=Host(`example.com`)
+      # - traefik.http.routers.laravel-app.entrypoints=websecure
+      # - traefik.http.routers.laravel-app.tls.certresolver=letsencrypt
+
+  queue-worker:
+    image: achelesstech/laravel-app:php8.4-latest
+    restart: unless-stopped
+    working_dir: /var/www/html
+    command: ["php", "artisan", "queue:work", "--sleep=3", "--tries=3", "--max-time=3600"]
+    <<: [*app-env, *app-volumes]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - internal
+    # Image HEALTHCHECK curls nginx:8080 which does not run here — replace it
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'queue:work' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  scheduler:
+    image: achelesstech/laravel-app:php8.4-latest
+    restart: unless-stopped
+    working_dir: /var/www/html
+    # schedule:work is the framework-native long-running scheduler
+    # (handles sub-minute schedules; no drift from shell sleep loops)
+    command: ["php", "artisan", "schedule:work"]
+    <<: [*app-env, *app-volumes]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'schedule:work' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # One-shot: docker compose --profile ops run --rm migrate
+  migrate:
+    image: achelesstech/laravel-app:php8.4-latest
+    working_dir: /var/www/html
+    command: ["php", "artisan", "migrate", "--force"]
+    <<: [*app-env, *app-volumes]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - internal
+    healthcheck:
+      disable: true
+    profiles:
+      - ops
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-laravel}
+      POSTGRES_USER: ${DB_USERNAME:-laravel}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-laravel} -d ${DB_DATABASE:-laravel}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+volumes:
+  postgres-data:
+  laravel-storage:
+  laravel-cache:
+
+networks:
+  # Shared with the (externally managed) Traefik container
+  proxy:
+    external: true
+  internal:
+    driver: bridge

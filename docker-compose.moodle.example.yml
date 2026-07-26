@@ -1,0 +1,102 @@
+# =============================================================================
+# Production example — Moodle 5.1 behind an EXTERNAL Traefik reverse proxy
+# =============================================================================
+# * moodledata on a named volume, shared with the cron sidecar
+# * cron via sidecar (or set MOODLE_RUN_CRON=true on the app instead — the
+#   entrypoint hook then registers a supervised in-container cron runner)
+# * MOODLE_URL should be the public https URL; MOODLE_SSLPROXY=true tells
+#   Moodle that TLS terminates at Traefik (prevents redirect loops)
+# =============================================================================
+
+x-moodle-env: &moodle-env
+  env_file: .env
+  environment:
+    MOODLE_DB_TYPE: mariadb
+    MOODLE_DB_HOST: mariadb
+    MOODLE_DB_NAME: ${MOODLE_DB_NAME:-moodle}
+    MOODLE_DB_USER: ${MOODLE_DB_USER:-moodle}
+    MOODLE_DB_PASSWORD: ${MOODLE_DB_PASSWORD:?set in .env}
+    MOODLE_URL: ${MOODLE_URL:?set in .env e.g. https://lms.example.com}
+    MOODLE_SSLPROXY: "true"
+
+services:
+  moodle:
+    build:
+      context: .
+      dockerfile: Dockerfile.moodle
+      args:
+        BASE_IMAGE: achelesstech/moodle-nginx-base:php8.4-latest
+        MOODLE_BRANCH: "501"
+    image: achelesstech/moodle-app:5.1-php8.4
+    restart: unless-stopped
+    <<: *moodle-env
+    volumes:
+      - moodledata:/var/moodledata
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    networks:
+      - proxy
+      - internal
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+      - traefik.http.services.moodle.loadbalancer.server.port=8080
+      # - traefik.http.routers.moodle.rule=Host(`lms.example.com`)
+
+  # Moodle requires cron every minute — sidecar shares code image + moodledata
+  moodle-cron:
+    image: achelesstech/moodle-app:5.1-php8.4
+    restart: unless-stopped
+    command:
+      - /bin/sh
+      - -c
+      - |
+        CLI="$${APP_ROOT}/admin/cli"; [ -d "$$CLI" ] || CLI="$${APP_ROOT}/public/admin/cli"
+        while true; do php "$$CLI/cron.php" || true; sleep 60; done
+    <<: *moodle-env
+    volumes:
+      - moodledata:/var/moodledata
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f cron.php || pgrep -f 'sleep 60' || exit 1"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+
+  mariadb:
+    image: mariadb:11.4
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: ${MOODLE_DB_NAME:-moodle}
+      MARIADB_USER: ${MOODLE_DB_USER:-moodle}
+      MARIADB_PASSWORD: ${MOODLE_DB_PASSWORD:?set in .env}
+      MARIADB_RANDOM_ROOT_PASSWORD: "yes"
+    command:
+      # Moodle requirements
+      - --innodb_file_per_table=1
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - internal
+
+volumes:
+  moodledata:
+  mariadb-data:
+
+networks:
+  proxy:
+    external: true
+  internal:
+    driver: bridge

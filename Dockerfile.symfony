@@ -1,0 +1,78 @@
+# =============================================================================
+# Symfony Application Image
+# Built on top of php-base-image
+# =============================================================================
+# Base image requirements:
+#   --build-arg INSTALL_MYSQL=true (or INSTALL_POSTGRESQL=true)
+#   --build-arg INSTALL_REDIS=true (optional, for cache/sessions)
+#   --build-arg APP_PUBLIC_DIR=public
+# =============================================================================
+
+ARG BASE_IMAGE=achelesstech/symfony-nginx-base:php8.4-latest
+FROM ${BASE_IMAGE} AS base
+ENV NGINX_PROFILE=generic
+
+# =============================================================================
+# Stage 1: Dependencies
+# =============================================================================
+FROM base AS deps
+USER www-data
+WORKDIR /var/www/html
+
+COPY --chown=www-data:www-data composer.json composer.lock symfony.lock ./
+RUN composer install \
+    --no-dev --no-scripts --no-autoloader \
+    --prefer-dist --optimize-autoloader
+
+# =============================================================================
+# Stage 2: Build
+# =============================================================================
+FROM deps AS build
+
+COPY --chown=www-data:www-data . .
+
+# Set APP_ENV for compilation
+ENV APP_ENV=prod
+
+RUN composer dump-autoload --optimize --classmap-authoritative \
+    && composer run-script post-install-cmd --no-interaction 2>/dev/null || true
+
+# Warm Symfony cache
+RUN php bin/console cache:warmup --env=prod --no-debug
+
+# =============================================================================
+# Stage 3: Production
+# =============================================================================
+FROM base AS production
+USER root
+WORKDIR /var/www/html
+
+COPY --from=build --chown=www-data:www-data /var/www/html /var/www/html
+
+# Remove dev artifacts
+RUN rm -rf .git tests var/cache/dev var/cache/test var/log/*.log
+
+# Symfony entrypoint hook
+RUN cat <<'SYMFONY_INIT' > /docker-entrypoint.d/10-symfony.sh
+#!/bin/sh
+set -e
+cd "${APP_ROOT}"
+
+# Ensure var/ directories exist
+mkdir -p var/cache var/log var/sessions
+
+# Run migrations if enabled
+if [ "${RUN_MIGRATIONS:-false}" = "true" ]; then
+    echo "[symfony] Running migrations..."
+    php bin/console doctrine:migrations:migrate --no-interaction --allow-no-migration || true
+fi
+
+# Clear and warm cache
+php bin/console cache:warmup --env="${APP_ENV:-prod}" --no-debug 2>/dev/null || true
+SYMFONY_INIT
+chmod +x /docker-entrypoint.d/10-symfony.sh
+
+RUN chown -R www-data:www-data /var/www/html
+USER www-data
+
+ENV APP_ENV=prod
