@@ -30,6 +30,7 @@ client ──TLS──► Cloudflare ──TLS──► Traefik ──plain HTTP
 | `scripts/traefik-doctor.sh` — `make doctor` | — |
 | `scripts/cf-ips.sh` — `make cf-ips` | — |
 | `scripts/acme-certs.sh` — `make certs` | — |
+| [`VPS-SETUP.md`](VPS-SETUP.md) | bare VPS to serving traffic, in order |
 | [`STATIC-CONFIG.md`](STATIC-CONFIG.md) | every static property, and why |
 | [`LABELS.md`](LABELS.md) | the labels an app repo needs |
 | [`AUDIT.md`](AUDIT.md) | what changed from the previous config, what was broken, and what was verified |
@@ -40,6 +41,11 @@ applies changes in about a second. If a change "did nothing", that is the first
 thing to check.
 
 ## First run
+
+On a **fresh VPS**, start at [`VPS-SETUP.md`](VPS-SETUP.md) — it covers the host
+itself (Docker install, the ufw/iptables trap, log rotation, the staging-ACME
+step) in the order that avoids locking yourself out or burning a rate limit. On
+a host that is already set up:
 
 ```bash
 make init                      # proxy network, certs/, secrets/, .env
@@ -130,8 +136,12 @@ every connection is SNATed to the bridge gateway, which makes the `trustedIPs`
 check meaningless — it would be comparing against the gateway, not against
 Cloudflare.
 
-**Read-only root filesystem.** Both containers. Traefik writes only to
-`certs/` and a small `tmpfs`.
+**Read-only root filesystem on Traefik.** It writes only to `certs/` and a
+small `tmpfs`. Not on the socket proxy — that image is haproxy and its
+entrypoint renders its own config at start, so a read-only root crash-loops it.
+Traefik also drops every capability except `NET_BIND_SERVICE`; both set
+`no-new-privileges`, and the socket proxy is on a network with no route off the
+host.
 
 **Token in a file, not an environment variable.** `CF_DNS_API_TOKEN_FILE`.
 Environment variables are visible in `docker inspect` and
