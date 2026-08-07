@@ -1,0 +1,89 @@
+# =============================================================================
+# dynamic/tls.yml — TLS options, hot-reloaded
+# =============================================================================
+# A router uses `default` unless it names another set:
+#   traefik.http.routers.myapp.tls.options=modern@file
+#
+# `default` is special in two ways:
+#
+#  1. It is applied automatically to every router that does not choose one.
+#     Renaming it silently drops everything back to Go's defaults — no error.
+#  2. It is registered WITHOUT a provider suffix, so it must never be
+#     referenced as `default@file`. Doing that on an entryPoint's
+#     `http.tls.options` makes Traefik log "unknown TLS options: default@file"
+#     and then fail to build EVERY router on that entryPoint — a total outage
+#     with a healthy container and a config that reads correctly.
+#
+# Named sets (`modern`, `compat`) DO take the suffix: `modern@file`.
+# Both behaviours verified against traefik 3.6.25.
+# =============================================================================
+
+tls:
+  options:
+
+    default:
+      minVersion: VersionTLS12
+      maxVersion: VersionTLS13
+
+      # Refuse connections that do not send SNI, instead of answering with a
+      # default certificate. Without this, anyone scanning the origin's IP
+      # gets a TLS handshake and a cert that names your domains — which is how
+      # an IP-hidden origin gets found. Cost: a handshake failure (not an HTTP
+      # error) for very old clients and for `curl https://<ip>`. That is the
+      # intent.
+      sniStrict: true
+
+      # TLS 1.3 suites are fixed by Go and are not listed here; this list only
+      # constrains TLS 1.2. All of them are AEAD with forward secrecy — no CBC,
+      # no RSA key exchange, no 3DES.
+      cipherSuites:
+        - TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+        - TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        - TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+        - TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+        - TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256
+        - TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
+
+      curvePreferences:
+        - X25519
+        - CurveP256
+        - CurveP384
+
+      alpnProtocols:
+        - h2
+        - http/1.1
+
+    # TLS 1.3 only. Use for APIs and admin surfaces where you control the
+    # clients. Attaching it to a public site locks out older Android and
+    # anything on OpenSSL 1.0.x.
+    modern:
+      minVersion: VersionTLS13
+      sniStrict: true
+      alpnProtocols:
+        - h2
+        - http/1.1
+
+    # Escape hatch for a legacy client (an old payment gateway callback, a
+    # scanner, an embedded device). Attach to ONE router, never the default.
+    compat:
+      minVersion: VersionTLS12
+      sniStrict: false
+
+# ---------------------------------------------------------------------------
+# Note on mutual TLS between Cloudflare and this origin
+# ---------------------------------------------------------------------------
+# Cloudflare "Authenticated Origin Pulls" makes the edge present a client
+# certificate, and lets you reject anything that does not. It is a stronger
+# lock than an IP allowlist, because Cloudflare's IP ranges are shared by every
+# Cloudflare customer — an allowlist proves the request came through
+# Cloudflare, not that it came through YOUR Cloudflare zone.
+#
+# To enable: download Cloudflare's origin-pull CA, mount it, and add
+#
+#   default:
+#     clientAuth:
+#       caFiles:
+#         - /etc/traefik/secrets/cloudflare-origin-pull-ca.pem
+#       clientAuthType: RequireAndVerifyClientCert
+#
+# Turn it on in the Cloudflare dashboard FIRST, or you lock yourself out.

@@ -184,5 +184,42 @@ End to end against real upstream sources:
 
 `Dockerfile.symfony` (never built — see bug 1; start from `laravel13` instead),
 `Dockerfile.moodle` (superseded by `Dockerfile.moodle-new`, which is now
-`apps/moodle5/`), and the four root compose files (replaced by per-app compose
-in `apps/*/`).
+`apps/moodle50/` and `apps/moodle52/`), and the four root compose files
+(replaced by per-app compose in `apps/*/`).
+
+---
+
+## Added — `traefik/`
+
+A complete edge-proxy deployment: `compose.yml`, static and dynamic config,
+`Makefile`, three operational scripts, and three documents
+(`README.md`, `STATIC-CONFIG.md` property-by-property, `LABELS.md` for app
+repos). It is **not** part of the image and nothing here depends on it; it
+lives in this repo temporarily so the proxy and the backends it fronts can be
+reviewed together, and will move to its own repository.
+
+Reviewed against the existing production config; findings and fixes are in
+`traefik/AUDIT.md`. The ones that were silently wrong rather than broken:
+
+- `rateLimit` `ipStrategy.depth: 2` yielded an **empty** source (the header has
+  one entry behind Cloudflare), so all three "per-IP" limits were a single
+  global bucket.
+- `trustedIPs` listed Cloudflare's IPv4 ranges and none of the IPv6 ones. Over
+  IPv6 the edge is untrusted, Traefik overwrites `X-Forwarded-For`, and every
+  backend sees Cloudflare as the client — the exact failure bug 24 fixed in
+  nginx, reintroduced one hop upstream.
+- `accessControlAllowOriginList: "https://*.freshie.farm"` is an exact-string
+  match and matched nothing; wildcards need the `…Regex` variant.
+- `ipAllowList` with no `ipStrategy` checks the TCP peer, which behind
+  Cloudflare is never RFC1918 — `chain-admin` returned 403 to everyone.
+- No `respondingTimeouts`, so `websecure` used the 60s default `readTimeout`,
+  which bounds the whole request **body**. Large Moodle uploads died as dead
+  connections with nothing in the PHP log.
+- `ACME_EMAIL` was passed in as an environment variable; Traefik does not
+  expand `${VAR}` in static config and nothing read it.
+
+Also: the raw Docker socket replaced with a POST-refusing socket proxy on an
+internal network, the Cloudflare token moved from an env var to a file secret,
+the CSP and `X-Robots-Tag: none` taken out of the default middleware chain
+(they break CMS editors and de-index public sites respectively), and logs moved
+from files inside the container to stdout.

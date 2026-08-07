@@ -1,0 +1,83 @@
+# =============================================================================
+# dynamic/routers.yml — routers for things Traefik cannot discover itself
+# =============================================================================
+# Containers on this host route themselves with labels, in their own compose
+# file. See ../../LABELS.md.
+#
+# This file is for the rest:
+#   - services on the host's network namespace (a bare-metal daemon)
+#   - services on another machine
+#   - static redirects that belong to no container
+#
+# Hot-reloaded. A syntax error here does not take Traefik down — it logs
+# "error while reading configuration" and keeps the previous state. Which also
+# means a typo can look like "my change did nothing". Check:
+#   docker compose logs --tail=40 traefik
+#
+# This file is deliberately all comments. An empty `http: {}` is NOT valid —
+# Traefik rejects it with "http cannot be a standalone element" and drops the
+# whole file provider on the first load. Uncomment a block and add real
+# children, or leave the file alone.
+# =============================================================================
+
+  # ---------------------------------------------------------------------------
+  # EXAMPLE 1 — a non-Docker service on the LAN
+  # ---------------------------------------------------------------------------
+  # routers:
+  #   nas:
+  #     rule: "Host(`nas.host04.freshie.farm`)"
+  #     entryPoints: [websecure]
+  #     tls:
+  #       certResolver: cloudflare
+  #     middlewares:
+  #       - chain-admin-restricted@file
+  #     service: nas-svc
+  #
+  # services:
+  #   nas-svc:
+  #     loadBalancer:
+  #       # Send the ORIGINAL Host header, not the backend's address. Almost
+  #       # every PHP app builds absolute URLs from it; set this false and you
+  #       # get links pointing at 192.168.1.50.
+  #       passHostHeader: true
+  #       servers:
+  #         - url: "http://192.168.1.50:8080"
+  #       healthCheck:
+  #         path: /
+  #         interval: 30s
+  #         timeout: 5s
+
+  # ---------------------------------------------------------------------------
+  # EXAMPLE 2 — a stricter router for one path of an app that Docker already
+  # routes. Higher priority wins; equal priority means the LONGER rule wins.
+  # ---------------------------------------------------------------------------
+  # routers:
+  #   moodle-login:
+  #     rule: "Host(`lms.freshie.farm`) && PathPrefix(`/login`)"
+  #     entryPoints: [websecure]
+  #     priority: 200          # must beat the container's own router
+  #     tls:
+  #       certResolver: cloudflare
+  #     middlewares:
+  #       - ratelimit-login@file
+  #       - security-headers@file
+  #     service: moodle@docker   # reuse the service the labels created
+
+  # ---------------------------------------------------------------------------
+  # EXAMPLE 3 — apex to www, or an old domain to a new one
+  # ---------------------------------------------------------------------------
+  # routers:
+  #   old-domain:
+  #     rule: "Host(`old.example.com`)"
+  #     entryPoints: [websecure]
+  #     tls:
+  #       certResolver: letsencrypt
+  #     middlewares: [old-domain-redirect]
+  #     service: noop@internal
+  #
+  # middlewares:
+  #   old-domain-redirect:
+  #     redirectRegex:
+  #       regex: "^https?://old\\.example\\.com/(.*)"
+  #       replacement: "https://new.example.com/${1}"
+  #       permanent: true

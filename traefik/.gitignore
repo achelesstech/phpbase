@@ -1,0 +1,15 @@
+# Never commit any of this.
+#
+# certs/acme-*.json holds the ACME account key AND the private key of every
+# certificate Traefik has issued. secrets/ holds a Cloudflare API token that can
+# edit your DNS.
+
+certs/*
+!certs/.gitkeep
+
+secrets/*
+!secrets/.gitkeep
+
+# `make backup` output
+traefik-state-*.tgz
+.cfgcheck.*

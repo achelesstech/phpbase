@@ -1,0 +1,1 @@
+# Traefik writes acme-*.json here. Private keys — never commit.

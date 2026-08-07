@@ -54,7 +54,11 @@ Working templates for Laravel 11/13, Drupal 11, Moodle 5.0/5.2 and WordPress
 are in [`apps/`](apps/). Copy one into the application repository.
 
 **Behind Traefik and Cloudflare?** Read
-[`docs/reverse-proxy.md`](docs/reverse-proxy.md) before going live.
+[`docs/reverse-proxy.md`](docs/reverse-proxy.md) before going live. A complete,
+hardened Traefik deployment — static config, dynamic config, compose, and a
+labels reference for app repos — is in [`traefik/`](traefik/). It lives here
+temporarily and will move to its own repository; nothing in this image depends
+on it.
 
 ### Two requirements on the application image
 
@@ -206,6 +210,7 @@ rootfs/
   usr/local/etc/php/conf.d/zz-base.ini
   usr/local/etc/php-fpm.d/www.conf
 apps/                                     templates to copy into app repos
+traefik/                                  the edge proxy (temporary home)
 docs/reverse-proxy.md                     Traefik + Cloudflare
 test/                                     fixture app + behavioural test suite
 .github/workflows/build-base.yml

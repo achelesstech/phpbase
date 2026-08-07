@@ -1,0 +1,398 @@
+# =============================================================================
+# dynamic/middlewares.yml — hot-reloaded, no restart needed
+# =============================================================================
+# Reference from a router with the @file suffix:
+#   traefik.http.routers.myapp.middlewares=chain-web@file
+#
+# The @file matters. Without it Traefik looks for a middleware defined by
+# Docker labels on the same container, does not find it, and the router
+# silently never becomes healthy.
+#
+# ORDER IS EXECUTION ORDER. A chain runs top to bottom on the request and
+# bottom to top on the response. Put the cheap rejections first: there is no
+# point compressing a response for a request you were going to rate-limit.
+# =============================================================================
+
+http:
+  middlewares:
+
+    # =========================================================================
+    # CHAINS — the only things a router should reference
+    # =========================================================================
+
+    # Default for a public web application (Moodle, Drupal, WordPress,
+    # Laravel). Deliberately does NOT include a Content-Security-Policy or
+    # X-Robots-Tag — see the notes on `security-headers` below.
+    chain-web:
+      chain:
+        middlewares:
+          - ratelimit-web
+          - security-headers
+          - compress
+
+    # JSON APIs. No CSP (meaningless for JSON), CORS enabled, tighter limit.
+    chain-api:
+      chain:
+        middlewares:
+          - ratelimit-api
+          - security-headers-api
+          - cors
+          - compress
+
+    # Admin surfaces reachable from the internet: strict limit + basic auth.
+    chain-admin:
+      chain:
+        middlewares:
+          - ratelimit-strict
+          - basic-auth
+          - security-headers
+
+    # Admin surfaces that should only be reachable from known client IPs.
+    # Combine with chain-admin, do not replace it.
+    chain-admin-restricted:
+      chain:
+        middlewares:
+          - ipallowlist-admin
+          - ratelimit-strict
+          - basic-auth
+          - security-headers
+
+    # The Traefik dashboard itself. Used by compose.yml.
+    chain-dashboard:
+      chain:
+        middlewares:
+          - ipallowlist-admin
+          - ratelimit-strict
+          - basic-auth
+          - security-headers
+
+    # =========================================================================
+    # AUTHENTICATION
+    # =========================================================================
+
+    basic-auth:
+      basicAuth:
+        # NOT in /etc/traefik/dynamic. That directory is watched by the file
+        # provider; a credentials file does not belong in a config directory
+        # that Traefik scans and that you might one day mount elsewhere.
+        usersFile: /etc/traefik/secrets/.htpasswd
+        # Strip the Authorization header before proxying, so the backend never
+        # sees the proxy credentials and cannot log them.
+        removeHeader: true
+        realm: "restricted"
+
+    # =========================================================================
+    # SECURITY HEADERS
+    # =========================================================================
+
+    security-headers:
+      headers:
+        # ── HSTS ──────────────────────────────────────────────────────────
+        # 1 year, subdomains included, NOT preloaded.
+        #
+        # stsPreload:true is a request to be added to a list compiled into
+        # every browser. It is effectively irreversible for months and it
+        # applies to the apex domain and EVERY subdomain, including ones that
+        # do not exist yet and any internal tool you later put on plain HTTP.
+        # Only turn it on when you have decided the whole domain is
+        # HTTPS-forever and you have actually submitted it at hstspreload.org.
+        forceSTSHeader: true
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        stsPreload: false
+
+        contentTypeNosniff: true
+        customFrameOptionsValue: SAMEORIGIN
+        referrerPolicy: strict-origin-when-cross-origin
+
+        permissionsPolicy: >-
+          accelerometer=(), camera=(), geolocation=(), gyroscope=(),
+          magnetometer=(), microphone=(), payment=(), usb=()
+
+        # NOTE: no contentSecurityPolicy here, and that is deliberate.
+        #
+        # A CSP is per-application, never per-proxy. `default-src 'self'` on a
+        # shared default chain breaks Moodle (inline handlers, blob: workers,
+        # MathJax), WordPress (block editor, any plugin with a CDN asset) and
+        # Drupal (CKEditor). It breaks them as blank panels and dead buttons
+        # with nothing in the server logs — the errors are in the browser
+        # console only, which is why this is such an expensive default.
+        #
+        # Attach `csp-strict` below to individual routers you have tested, or
+        # let the application emit its own CSP.
+
+        # NOTE: no X-Robots-Tag here either. In your previous config the
+        # default chain sent `X-Robots-Tag: none`, which de-indexes every
+        # public site it is attached to. Use `noindex` explicitly, per router.
+
+        customResponseHeaders:
+          Server: ""
+          X-Powered-By: ""
+          X-AspNet-Version: ""
+          # X-XSS-Protection is deprecated and its filter has itself been a
+          # source of vulnerabilities. The current recommendation is to send 0
+          # (disable the legacy auditor) rather than 1; browserXssFilter:true
+          # would send 1.
+          X-XSS-Protection: "0"
+
+    security-headers-api:
+      headers:
+        forceSTSHeader: true
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        contentTypeNosniff: true
+        referrerPolicy: strict-origin-when-cross-origin
+        customResponseHeaders:
+          Server: ""
+          X-Powered-By: ""
+          X-XSS-Protection: "0"
+
+    # Opt-in. Attach to routers you have actually tested in a browser with the
+    # console open. Start here, then loosen per app.
+    csp-strict:
+      headers:
+        contentSecurityPolicy: >-
+          default-src 'self';
+          script-src 'self' 'unsafe-inline' 'unsafe-eval';
+          style-src 'self' 'unsafe-inline';
+          img-src 'self' data: blob: https:;
+          font-src 'self' data:;
+          connect-src 'self' https: wss:;
+          worker-src 'self' blob:;
+          frame-ancestors 'self';
+          base-uri 'self';
+          form-action 'self'
+
+    # Opt-in. Staging, admin tools, anything that must not reach Google.
+    noindex:
+      headers:
+        customResponseHeaders:
+          X-Robots-Tag: "noindex, nofollow, noarchive, nosnippet"
+
+    # =========================================================================
+    # RATE LIMITING
+    # =========================================================================
+    #
+    # ipStrategy.depth is the setting people get wrong, and it fails silently.
+    #
+    # depth counts from the RIGHT of X-Forwarded-For. In this stack the header
+    # arriving at Traefik has exactly one entry:
+    #
+    #   client -> Cloudflare -> Traefik      XFF: "<client>"
+    #   client -> Traefik (direct)           XFF: "<client>"   (Traefik sets it)
+    #
+    # so depth MUST be 1. Your previous config used depth: 2. When depth
+    # exceeds the number of entries Traefik yields an empty source, every
+    # request lands in the same bucket, and the "per-IP" limit becomes a single
+    # global limit that one busy user can exhaust for everybody.
+    #
+    # depth:1 is also spoof-proof: if a client forges
+    # `X-Forwarded-For: 1.2.3.4`, Cloudflare APPENDS the real address, so the
+    # rightmost entry is still the real client.
+    #
+    # Verify after any change:  make doctor
+    # =========================================================================
+
+    ratelimit-web:
+      rateLimit:
+        average: 200
+        period: 1s
+        burst: 150
+        sourceCriterion:
+          ipStrategy:
+            depth: 1
+
+    ratelimit-api:
+      rateLimit:
+        average: 100
+        period: 1s
+        burst: 80
+        sourceCriterion:
+          ipStrategy:
+            depth: 1
+
+    ratelimit-strict:
+      rateLimit:
+        average: 30
+        period: 1s
+        burst: 20
+        sourceCriterion:
+          ipStrategy:
+            depth: 1
+
+    # For login endpoints. Per-minute, so a burst of credential stuffing is
+    # actually slowed rather than merely smoothed.
+    ratelimit-login:
+      rateLimit:
+        average: 20
+        period: 1m
+        burst: 10
+        sourceCriterion:
+          ipStrategy:
+            depth: 1
+
+    # =========================================================================
+    # COMPRESSION
+    # =========================================================================
+
+    compress:
+      compress:
+        minResponseBodyBytes: 1024
+        encodings: [zstd, br, gzip]
+        excludedContentTypes:
+          - image/png
+          - image/jpeg
+          - image/gif
+          - image/webp
+          - image/avif
+          - video/mp4
+          - application/zip
+          - application/gzip
+          - application/x-gzip
+          - application/octet-stream
+          # Server-Sent Events. Buffering a stream to compress it means the
+          # client receives nothing until the stream ends.
+          - text/event-stream
+
+    # =========================================================================
+    # CORS
+    # =========================================================================
+
+    cors:
+      headers:
+        # accessControlAllowOriginList does EXACT string matching. The entry
+        # "https://*.freshie.farm" in your previous config never matched any
+        # real Origin header, so every cross-origin request was rejected and
+        # the middleware did nothing but add latency. Wildcards need the Regex
+        # variant.
+        accessControlAllowOriginListRegex:
+          - "^https://([a-z0-9-]+\\.)*freshie\\.farm$"
+        accessControlAllowMethods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
+        accessControlAllowHeaders:
+          - Content-Type
+          - Authorization
+          - X-Requested-With
+          - Accept
+          - Origin
+        accessControlExposeHeaders:
+          - X-Request-Id
+          - X-RateLimit-Limit
+          - X-RateLimit-Remaining
+        accessControlAllowCredentials: true
+        accessControlMaxAge: 86400
+        # Without this a cache can serve a response with the wrong
+        # Access-Control-Allow-Origin to a different origin.
+        addVaryHeader: true
+
+    # =========================================================================
+    # IP RESTRICTIONS
+    # =========================================================================
+    #
+    # Two kinds, and they need OPPOSITE strategies. This is the other setting
+    # that quietly does the wrong thing.
+    #
+    #  - "only Cloudflare may CONNECT"  -> check the TCP peer -> NO ipStrategy
+    #  - "only my office may BROWSE"    -> check the end user -> depth: 1
+    #
+    # Your previous `chain-admin` used a plain RFC1918 allowlist with no
+    # strategy. Behind Cloudflare the peer is a Cloudflare address, never
+    # 10/8, so that chain returned 403 to everyone including you.
+    # =========================================================================
+
+    # Layer-3 lock: refuse anything that did not come through the edge.
+    # Attach to routers, or drop it and use a host firewall / Cloudflare
+    # Tunnel, which is stronger because there is then no open port at all.
+    ipallowlist-cloudflare-edge:
+      ipAllowList:
+        sourceRange:
+          # Regenerate with: make cf-ips
+          - "173.245.48.0/20"
+          - "103.21.244.0/22"
+          - "103.22.200.0/22"
+          - "103.31.4.0/22"
+          - "141.101.64.0/18"
+          - "108.162.192.0/18"
+          - "190.93.240.0/20"
+          - "188.114.96.0/20"
+          - "197.234.240.0/22"
+          - "198.41.128.0/17"
+          - "162.158.0.0/15"
+          - "104.16.0.0/13"
+          - "104.24.0.0/14"
+          - "172.64.0.0/13"
+          - "131.0.72.0/22"
+          - "2400:cb00::/32"
+          - "2606:4700::/32"
+          - "2803:f800::/32"
+          - "2405:b500::/32"
+          - "2405:8100::/32"
+          - "2a06:98c0::/29"
+          - "2c0f:f248::/32"
+
+    # End-user lock for admin surfaces and the dashboard.
+    #
+    # EDIT sourceRange BEFORE USING THIS. As shipped it allows only private
+    # ranges, which means only something already inside the network — an SSH
+    # tunnel or a VPN. That is the safe default; add your office/VPN egress
+    # address to reach it from a browser.
+    ipallowlist-admin:
+      ipAllowList:
+        sourceRange:
+          - "10.0.0.0/8"
+          - "172.16.0.0/12"
+          - "192.168.0.0/16"
+          - "127.0.0.1/32"
+          # - "203.0.113.10/32"   # office egress
+        ipStrategy:
+          depth: 1
+
+    # =========================================================================
+    # REDIRECTS / PATH
+    # =========================================================================
+
+    # In a FILE like this one, use ${1}. In a Docker LABEL you must write
+    # $${1} — compose interpolates $ before Traefik ever sees the label, and a
+    # bare ${1} becomes an empty string, so www.example.com redirects to
+    # https:// and loops.
+    redirect-to-apex:
+      redirectRegex:
+        regex: "^https?://www\\.(.+)"
+        replacement: "https://${1}"
+        permanent: true
+
+    strip-api-prefix:
+      stripPrefix:
+        prefixes: ["/api"]
+
+    # =========================================================================
+    # RESILIENCE — opt-in, none of these are in a chain
+    # =========================================================================
+
+    # Retries only when the backend never sent a response header, so it will
+    # not replay a request the app already processed. Still: do not attach this
+    # to routers handling payments or any other non-idempotent POST.
+    retry:
+      retry:
+        attempts: 3
+        initialInterval: 100ms
+
+    circuit-breaker:
+      circuitBreaker:
+        expression: "ResponseCodeRatio(500, 600, 0, 600) > 0.5 || NetworkErrorRatio() > 0.1"
+        checkPeriod: 10s
+        fallbackDuration: 30s
+        recoveryDuration: 10s
+
+    # DO NOT attach this to a Moodle, Drupal or WordPress router.
+    #
+    # `buffering` reads the entire request body into memory/disk before the
+    # backend sees a single byte, and maxRequestBodyBytes is a hard 413. It
+    # therefore caps uploads at 100 MB, adds full-upload latency, and breaks
+    # streaming responses and websockets. It exists for a backend that cannot
+    # cope with chunked bodies at all. Nothing in this stack qualifies.
+    buffer-small-requests:
+      buffering:
+        maxRequestBodyBytes: 10485760      # 10 MB
+        memRequestBodyBytes: 2097152
+        maxResponseBodyBytes: 0
+        retryExpression: "IsNetworkError() && Attempts() < 2"

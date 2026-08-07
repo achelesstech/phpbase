@@ -34,6 +34,11 @@ login throttle and IP ban in every app.
 
 ## Traefik: the two settings that matter
 
+> A complete working Traefik deployment with both of these already configured
+> is in [`../traefik/`](../traefik/) — plus a hardened compose file, a labels
+> reference for app repos ([`LABELS.md`](../traefik/LABELS.md)) and a
+> `make doctor` that proves the chain is not spoofable.
+
 ### 1. Trust Cloudflare, and nothing else
 
 Static config:
