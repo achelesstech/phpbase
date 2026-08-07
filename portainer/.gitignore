@@ -1,0 +1,10 @@
+# Never commit any of this.
+#
+# secrets/encryption_key opens the Portainer data store; secrets/admin_password
+# is the admin login in plaintext; the backups contain both.
+
+secrets/*
+!secrets/.gitkeep
+
+portainer-backup-*.tgz
+.backup.*
