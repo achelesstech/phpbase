@@ -274,7 +274,7 @@ observable symptom is "my change did nothing". Check the log.
 ```yaml
 cloudflare:
   acme:
-    email: "roneybd85@gmail.com"
+    email: "admin@example.com"
     storage: /etc/traefik/certs/acme-cloudflare.json
     keyType: EC256
     dnsChallenge:

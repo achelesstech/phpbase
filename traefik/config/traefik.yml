@@ -251,8 +251,11 @@ providers:
 # ---------------------------------------------------------------------------
 # Certificate Resolvers
 # ---------------------------------------------------------------------------
-# The ACME account email is here and not in .env because static config has no
-# variable expansion. Changing it means editing this file.
+# ── EDIT THIS ──────────────────────────────────────────────────────────────
+# Both `email:` values below are placeholders. They are here rather than in
+# .env because static config has no variable expansion, so this is the only
+# place they can live. Let's Encrypt sends expiry warnings to this address and
+# rejects obviously fake ones — put a real mailbox here before `make up`.
 certificatesResolvers:
 
   # ── DNS-01 via Cloudflare — the default ───────────────────────────────────
@@ -260,7 +263,7 @@ certificatesResolvers:
   # works before DNS points at this host. Needs CF_DNS_API_TOKEN.
   cloudflare:
     acme:
-      email: "roneybd85@gmail.com"
+      email: "admin@example.com"
       storage: /etc/traefik/certs/acme-cloudflare.json
       # caServer: https://acme-staging-v02.api.letsencrypt.org/directory
       keyType: EC256
@@ -284,7 +287,7 @@ certificatesResolvers:
   # over the redirection. Cannot issue wildcards.
   letsencrypt:
     acme:
-      email: "roneybd85@gmail.com"
+      email: "admin@example.com"
       storage: /etc/traefik/certs/acme-http.json
       keyType: EC256
       httpChallenge:

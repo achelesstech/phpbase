@@ -25,7 +25,7 @@
   # ---------------------------------------------------------------------------
   # routers:
   #   nas:
-  #     rule: "Host(`nas.host04.freshie.farm`)"
+  #     rule: "Host(`nas.example.com`)"
   #     entryPoints: [websecure]
   #     tls:
   #       certResolver: cloudflare
@@ -53,7 +53,7 @@
   # ---------------------------------------------------------------------------
   # routers:
   #   moodle-login:
-  #     rule: "Host(`lms.freshie.farm`) && PathPrefix(`/login`)"
+  #     rule: "Host(`lms.example.com`) && PathPrefix(`/login`)"
   #     entryPoints: [websecure]
   #     priority: 200          # must beat the container's own router
   #     tls:

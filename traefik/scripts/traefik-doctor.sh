@@ -3,7 +3,7 @@
 # traefik-doctor.sh — check the things that fail silently
 # =============================================================================
 #   ./scripts/traefik-doctor.sh
-#   ./scripts/traefik-doctor.sh https://lms.freshie.farm   # + live spoof test
+#   ./scripts/traefik-doctor.sh https://lms.example.com   # + live spoof test
 #
 # Traefik's failure modes are mostly not errors. A wrong trustedIPs list, a
 # rate-limit depth that yields an empty source, an ipAllowList checking the
@@ -112,11 +112,14 @@ grep -q 'exposedByDefault: false' "$STATIC" \
     || bad "exposedByDefault is true — every container on the proxy network is
         published the moment it gets a Host rule"
 
-grep -q 'insecure: true' "$STATIC" \
+grep -qE '^[[:space:]]*insecure:[[:space:]]*true' "$STATIC" \
     && bad "api.insecure is true — the dashboard is on :8080 with no auth" \
     || ok "api.insecure is false"
 
-if grep -q 'unix:///var/run/docker.sock' "$STATIC"; then
+# Anchored to a real setting line. Unanchored, this matched the comment
+# directly above the endpoint that explains why the raw socket is not used —
+# a check that reports the exact problem it was written to rule out.
+if grep -qE '^[[:space:]]*endpoint:.*unix:///var/run/docker\.sock' "$STATIC"; then
     note "the docker provider uses the raw socket. Even :ro that is full
         Docker API access, i.e. root on the host, held by your most exposed
         process. Point it at socket-proxy instead."
@@ -138,13 +141,39 @@ else
     ok "no CSP on the shared header middleware (opt in with csp-strict@file)"
 fi
 
-grep -q 'stsPreload: true' "$MW" \
+grep -qE '^[[:space:]]*stsPreload:[[:space:]]*true' "$MW" \
     && note "stsPreload is on. Only correct if you have actually submitted the
         domain at hstspreload.org — it is baked into browsers and covers every
         subdomain, including ones that do not exist yet." \
     || ok "HSTS preload not asserted"
 
 # -----------------------------------------------------------------------------
+sec "placeholders"
+# Shipped placeholders that fail quietly rather than loudly.
+grep -q 'admin@example.com' "$STATIC" \
+    && bad "the ACME email is still the placeholder admin@example.com —
+        Let's Encrypt expiry warnings go nowhere, and it may reject the account" \
+    || ok "ACME email has been set"
+
+# -F, not a regex: the value in the file is an escaped-for-YAML regex
+# (example\\.com), and matching backslashes through two levels of quoting is how
+# a check ends up silently never firing.
+if grep -q 'accessControlAllowOriginListRegex' "$MW" \
+   && grep -qF 'example\\.com' "$MW"; then
+    note "the CORS origin regex is still example.com. It fails CLOSED, so every
+        cross-origin request on chain-api is rejected with no logged reason."
+else
+    ok "CORS origin regex has been set"
+fi
+
+if grep -qE '^\s*- "203\.0\.113\.' "$MW"; then
+    ok "ipallowlist-admin has a public source range"
+else
+    note "ipallowlist-admin allows private ranges only — reachable via VPN or an
+        SSH tunnel, not from a browser on the internet. Intentional default;
+        add your egress address if you want browser access."
+fi
+
 sec "network wiring"
 if docker network inspect proxy >/dev/null 2>&1; then
     ok "the 'proxy' network exists"
@@ -174,7 +203,7 @@ sec "certificates"
 sec "live spoofing test"
 if [ -z "$PUBLIC_URL" ]; then
     note "skipped — pass a public URL to run it:
-        ./scripts/traefik-doctor.sh https://lms.freshie.farm"
+        ./scripts/traefik-doctor.sh https://lms.example.com"
 else
     probe="/__doctor-$RANDOM$RANDOM"
     # Send a forged X-Forwarded-For from the open internet. Traefik must

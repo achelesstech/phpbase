@@ -59,17 +59,17 @@ the live config had drifted from the documentation.
 
 ```yaml
 accessControlAllowOriginList:
-  - "https://*.freshie.farm"
+  - "https://*.example.com"
 ```
 
 `accessControlAllowOriginList` is an **exact string** comparison. No `Origin`
-header is ever literally `https://*.freshie.farm`, so every cross-origin
+header is ever literally `https://*.example.com`, so every cross-origin
 request was rejected and the middleware added latency and nothing else.
 Wildcards require the regex variant:
 
 ```yaml
 accessControlAllowOriginListRegex:
-  - "^https://([a-z0-9-]+\\.)*freshie\\.farm$"
+  - "^https://([a-z0-9-]+\\.)*example\\.com$"
 ```
 
 Also added `accessControlAllowCredentials: true`, without which a browser

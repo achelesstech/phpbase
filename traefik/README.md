@@ -51,11 +51,22 @@ make up
 make doctor
 ```
 
-Two things in `config/traefik.yml` must be edited by hand, because Traefik does
-**not** expand `${VAR}` in static config:
+### Placeholders to replace
 
-- `certificatesResolvers.*.acme.email`
-- the `trustedIPs` list, if your networks are not RFC1918
+Everything here ships with `example.com` and a placeholder email. `make doctor`
+flags the ones still unset, but the first three matter before `make up`:
+
+| Where | What | If left alone |
+|---|---|---|
+| `config/traefik.yml` | `certificatesResolvers.*.acme.email` (**twice**) | expiry warnings go nowhere; Let's Encrypt may reject the account |
+| `.env` | `TRAEFIK_DOMAIN` | compose refuses to start — this one fails loudly |
+| `config/dynamic/middlewares.yml` | `cors.accessControlAllowOriginListRegex` | fails closed: every cross-origin request on `chain-api` is rejected, silently |
+| `config/dynamic/middlewares.yml` | `ipallowlist-admin.sourceRange` | private ranges only — dashboard reachable via VPN/SSH tunnel, not a browser |
+| `config/traefik.yml` | `trustedIPs`, if your networks are not RFC1918 | forwarded headers from your own proxies get overwritten |
+
+The email and the trusted-IP list live in `config/traefik.yml` and **cannot**
+move to `.env`: Traefik does not expand `${VAR}` in static config. The previous
+setup passed `ACME_EMAIL` in through compose, where nothing read it.
 
 ## Day to day
 
@@ -64,7 +75,7 @@ make logs                      # follow
 make logs-access               # access log only, one line per request
 make certs                     # issued domains + expiry
 make doctor                    # the checks that fail silently
-make doctor https://lms.freshie.farm   # + live X-Forwarded-For spoof test
+make doctor https://lms.example.com   # + live X-Forwarded-For spoof test
 make cf-ips                    # committed Cloudflare ranges vs the live list
 make backup                    # tar certs/ + secrets/  (private keys — encrypt it)
 ```
@@ -93,7 +104,7 @@ labels:
   - traefik.enable=true
   - traefik.docker.network=proxy
   - traefik.http.services.lms.loadbalancer.server.port=8080
-  - traefik.http.routers.lms.rule=Host(`lms.freshie.farm`)
+  - traefik.http.routers.lms.rule=Host(`lms.example.com`)
   - traefik.http.routers.lms.entrypoints=websecure
   - traefik.http.routers.lms.tls.certresolver=cloudflare
   - traefik.http.routers.lms.middlewares=chain-web@file

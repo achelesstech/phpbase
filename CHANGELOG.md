@@ -208,7 +208,7 @@ Reviewed against the existing production config; findings and fixes are in
   IPv6 the edge is untrusted, Traefik overwrites `X-Forwarded-For`, and every
   backend sees Cloudflare as the client — the exact failure bug 24 fixed in
   nginx, reintroduced one hop upstream.
-- `accessControlAllowOriginList: "https://*.freshie.farm"` is an exact-string
+- `accessControlAllowOriginList: "https://*.example.com"` is an exact-string
   match and matched nothing; wildcards need the `…Regex` variant.
 - `ipAllowList` with no `ipStrategy` checks the TCP peer, which behind
   Cloudflare is never RFC1918 — `chain-admin` returned 403 to everyone.

@@ -260,13 +260,17 @@ http:
 
     cors:
       headers:
+        # ── EDIT THIS ────────────────────────────────────────────────────────
+        # `example.com` below is a placeholder. It fails closed — no real
+        # Origin matches, so every cross-origin request is rejected until you
+        # put your own domain here. Nothing logs a reason.
         # accessControlAllowOriginList does EXACT string matching. The entry
-        # "https://*.freshie.farm" in your previous config never matched any
+        # "https://*.example.com" in your previous config never matched any
         # real Origin header, so every cross-origin request was rejected and
         # the middleware did nothing but add latency. Wildcards need the Regex
         # variant.
         accessControlAllowOriginListRegex:
-          - "^https://([a-z0-9-]+\\.)*freshie\\.farm$"
+          - "^https://([a-z0-9-]+\\.)*example\\.com$"
         accessControlAllowMethods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
         accessControlAllowHeaders:
           - Content-Type

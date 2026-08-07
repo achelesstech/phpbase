@@ -19,7 +19,7 @@ services:
       - traefik.enable=true
       - traefik.docker.network=proxy
       - traefik.http.services.lms.loadbalancer.server.port=8080
-      - traefik.http.routers.lms.rule=Host(`lms.freshie.farm`)
+      - traefik.http.routers.lms.rule=Host(`lms.example.com`)
       - traefik.http.routers.lms.entrypoints=websecure
       - traefik.http.routers.lms.tls.certresolver=cloudflare
       - traefik.http.routers.lms.middlewares=chain-web@file
@@ -67,16 +67,16 @@ work. Pick one and stay consistent.
 ## Rules
 
 ```yaml
-- traefik.http.routers.lms.rule=Host(`lms.freshie.farm`)
+- traefik.http.routers.lms.rule=Host(`lms.example.com`)
 
 # Several names on one route
-- traefik.http.routers.lms.rule=Host(`lms.freshie.farm`) || Host(`www.lms.freshie.farm`)
+- traefik.http.routers.lms.rule=Host(`lms.example.com`) || Host(`www.lms.example.com`)
 
 # A subtree
-- traefik.http.routers.api.rule=Host(`app.freshie.farm`) && PathPrefix(`/api`)
+- traefik.http.routers.api.rule=Host(`app.example.com`) && PathPrefix(`/api`)
 
 # Everything except a subtree — v3 syntax; v2's `!` on a bare matcher is gone
-- traefik.http.routers.web.rule=Host(`app.freshie.farm`) && !PathPrefix(`/api`)
+- traefik.http.routers.web.rule=Host(`app.example.com`) && !PathPrefix(`/api`)
 ```
 
 Backticks, not quotes. Traefik v3 renamed several v2 matchers
@@ -221,7 +221,7 @@ services:
     restart: unless-stopped
     networks: [proxy, internal]
     environment:
-      MOODLE_URL: https://lms.freshie.farm
+      MOODLE_URL: https://lms.example.com
       MOODLE_SSLPROXY: "true"        # mandatory, or infinite redirect loop
       PHP_UPLOAD_MAX_FILESIZE: 512M
     labels:
@@ -230,13 +230,13 @@ services:
       - traefik.http.services.lms.loadbalancer.server.port=8080
 
       # main site
-      - traefik.http.routers.lms.rule=Host(`lms.freshie.farm`)
+      - traefik.http.routers.lms.rule=Host(`lms.example.com`)
       - traefik.http.routers.lms.entrypoints=websecure
       - traefik.http.routers.lms.tls.certresolver=cloudflare
       - traefik.http.routers.lms.middlewares=chain-web@file
 
       # tighter limit on the login form only. Longer rule, so it already wins.
-      - traefik.http.routers.lms-login.rule=Host(`lms.freshie.farm`) && PathPrefix(`/login`)
+      - traefik.http.routers.lms-login.rule=Host(`lms.example.com`) && PathPrefix(`/login`)
       - traefik.http.routers.lms-login.entrypoints=websecure
       - traefik.http.routers.lms-login.tls.certresolver=cloudflare
       - traefik.http.routers.lms-login.middlewares=ratelimit-login@file,chain-web@file
