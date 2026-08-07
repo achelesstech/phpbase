@@ -1,0 +1,7 @@
+# WordPress core is downloaded during the build. Only docker/ and any
+# committed themes/plugins need to be in the context.
+*
+!docker/
+!wp-content/themes/
+!wp-content/plugins/
+!wp-content/mu-plugins/

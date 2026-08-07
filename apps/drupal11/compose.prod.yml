@@ -1,0 +1,102 @@
+# =============================================================================
+# Production — Drupal 11 behind an external Traefik
+# =============================================================================
+#   docker compose -f compose.prod.yml up -d
+#   docker compose -f compose.prod.yml --profile ops run --rm drush updatedb -y
+# =============================================================================
+
+x-app-env: &app-env
+  env_file: .env
+  environment:
+    PHP_MEMORY_LIMIT: 512M
+    PHP_UPLOAD_MAX_FILESIZE: 128M
+    PHP_POST_MAX_SIZE: 128M
+    PHP_OPCACHE_VALIDATE_TIMESTAMPS: "0"
+    FPM_MAX_CHILDREN: "16"
+    DRUPAL_REVERSE_PROXY: "true"
+
+services:
+  app:
+    build:
+      context: .
+      target: production
+    image: ghcr.io/achelesstech/drupal11-app:latest
+    restart: unless-stopped
+    <<: *app-env
+    volumes:
+      # Only user uploads are state. Code comes from the image.
+      - drupal-files:/var/www/html/web/sites/default/files
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [proxy, internal]
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+      - traefik.http.services.drupal11.loadbalancer.server.port=8080
+      # - traefik.http.routers.drupal11.rule=Host(`www.example.com`)
+      # - traefik.http.routers.drupal11.entrypoints=websecure
+      # - traefik.http.routers.drupal11.tls.certresolver=letsencrypt
+
+  cron:
+    image: ghcr.io/achelesstech/drupal11-app:latest
+    restart: unless-stopped
+    command:
+      - /bin/sh
+      - -c
+      - 'while true; do ./vendor/bin/drush cron || true; sleep 300; done'
+    <<: *app-env
+    volumes:
+      - drupal-files:/var/www/html/web/sites/default/files
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [internal]
+    # No nginx in this container, so the image healthcheck cannot pass.
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'sleep 300' >/dev/null || pgrep -f drush >/dev/null || exit 1"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+
+  # docker compose -f compose.prod.yml --profile ops run --rm drush <command>
+  drush:
+    image: ghcr.io/achelesstech/drupal11-app:latest
+    entrypoint: ["./vendor/bin/drush"]
+    <<: *app-env
+    volumes:
+      - drupal-files:/var/www/html/web/sites/default/files
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [internal]
+    healthcheck:
+      disable: true
+    profiles: [ops]
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POSTGRES_DB:       ${DRUPAL_DB_NAME:-drupal}
+      POSTGRES_USER:     ${DRUPAL_DB_USER:-drupal}
+      POSTGRES_PASSWORD: ${DRUPAL_DB_PASSWORD:?set DRUPAL_DB_PASSWORD in .env}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DRUPAL_DB_USER:-drupal} -d ${DRUPAL_DB_NAME:-drupal}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [internal]
+
+volumes:
+  drupal-files:
+  db-data:
+
+networks:
+  proxy:
+    external: true
+  internal:
+    driver: bridge

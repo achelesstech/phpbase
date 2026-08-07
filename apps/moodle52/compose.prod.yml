@@ -1,0 +1,178 @@
+# =============================================================================
+# Production — Moodle 5.2 behind an external Traefik
+# =============================================================================
+#   docker compose -f compose.prod.yml build
+#   docker compose -f compose.prod.yml up -d
+#
+# First install (once, after the DB is up):
+#   docker compose -f compose.prod.yml --profile ops run --rm install
+# =============================================================================
+
+x-moodle-env: &moodle-env
+  env_file: .env
+  environment:
+    MOODLE_DB_TYPE:     mariadb
+    MOODLE_DB_HOST:     db
+    MOODLE_DB_NAME:     ${MOODLE_DB_NAME:-moodle}
+    MOODLE_DB_USER:     ${MOODLE_DB_USER:-moodle}
+    MOODLE_DB_PASSWORD: ${MOODLE_DB_PASSWORD:?set MOODLE_DB_PASSWORD in .env}
+    MOODLE_URL:         ${MOODLE_URL:?set MOODLE_URL in .env, e.g. https://lms.example.com}
+    MOODLE_SSLPROXY:    "true"
+    # Moodle is memory-hungry and course backups are large.
+    PHP_MEMORY_LIMIT:        512M
+    PHP_UPLOAD_MAX_FILESIZE: 512M
+    PHP_POST_MAX_SIZE:       512M
+    PHP_MAX_EXECUTION_TIME:  "600"
+    PHP_MAX_INPUT_VARS:      "10000"
+    FPM_MAX_CHILDREN:        "24"
+    # Redis sessions are REQUIRED if you ever run more than one app replica.
+    # MOODLE_SESSION_HANDLER: redis
+    # MOODLE_SESSION_REDIS_HOST: redis
+
+services:
+  app:
+    build:
+      context: .
+      args:
+        MOODLE_BRANCH: "502"
+    image: ghcr.io/achelesstech/moodle52-app:latest
+    restart: unless-stopped
+    <<: *moodle-env
+    volumes:
+      - moodledata:/var/moodledata
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [proxy, internal]
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+      - traefik.http.services.moodle.loadbalancer.server.port=8080
+      # - traefik.http.routers.moodle.rule=Host(`lms.example.com`)
+      # - traefik.http.routers.moodle.entrypoints=websecure
+      # - traefik.http.routers.moodle.tls.certresolver=letsencrypt
+      # HSTS and TLS belong on Traefik, not in the image:
+      # - traefik.http.routers.moodle.middlewares=moodle-hsts
+      # - traefik.http.middlewares.moodle-hsts.headers.stsSeconds=31536000
+      # - traefik.http.middlewares.moodle-hsts.headers.stsIncludeSubdomains=true
+
+  # Moodle needs cron every minute or scheduled tasks silently stop running.
+  # Use EITHER this sidecar OR MOODLE_RUN_CRON=true on the app — never both.
+  cron:
+    image: ghcr.io/achelesstech/moodle52-app:latest
+    restart: unless-stopped
+    command: ["/usr/local/bin/moodle-cron.sh"]
+    <<: *moodle-env
+    volumes:
+      - moodledata:/var/moodledata
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [internal]
+    # No nginx here, so the image healthcheck cannot pass.
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f moodle-cron.sh >/dev/null || exit 1"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+
+  # One-shot first install:
+  #   docker compose -f compose.prod.yml --profile ops run --rm install
+  install:
+    image: ghcr.io/achelesstech/moodle52-app:latest
+    <<: *moodle-env
+    environment:
+      MOODLE_ADMIN_USER:     ${MOODLE_ADMIN_USER:-admin}
+      MOODLE_ADMIN_PASSWORD: ${MOODLE_ADMIN_PASSWORD:?set MOODLE_ADMIN_PASSWORD in .env}
+      MOODLE_ADMIN_EMAIL:    ${MOODLE_ADMIN_EMAIL:?set MOODLE_ADMIN_EMAIL in .env}
+      MOODLE_SITE_NAME:      ${MOODLE_SITE_NAME:-Moodle}
+    command:
+      - /bin/sh
+      - -c
+      - |
+        CLI="$${APP_ROOT}/public/admin/cli"; [ -d "$$CLI" ] || CLI="$${APP_ROOT}/admin/cli"
+        php "$$CLI/install_database.php" \
+          --agree-license \
+          --adminuser="$$MOODLE_ADMIN_USER" \
+          --adminpass="$$MOODLE_ADMIN_PASSWORD" \
+          --adminemail="$$MOODLE_ADMIN_EMAIL" \
+          --fullname="$$MOODLE_SITE_NAME" \
+          --shortname="$$MOODLE_SITE_NAME"
+    volumes:
+      - moodledata:/var/moodledata
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [internal]
+    healthcheck:
+      disable: true
+    profiles: [ops]
+
+  # Run after pulling a new image tag:
+  #   docker compose -f compose.prod.yml --profile ops run --rm upgrade
+  upgrade:
+    image: ghcr.io/achelesstech/moodle52-app:latest
+    <<: *moodle-env
+    command:
+      - /bin/sh
+      - -c
+      - |
+        CLI="$${APP_ROOT}/public/admin/cli"; [ -d "$$CLI" ] || CLI="$${APP_ROOT}/admin/cli"
+        php "$$CLI/maintenance.php" --enable
+        php "$$CLI/upgrade.php" --non-interactive
+        php "$$CLI/maintenance.php" --disable
+    volumes:
+      - moodledata:/var/moodledata
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [internal]
+    healthcheck:
+      disable: true
+    profiles: [ops]
+
+  db:
+    image: mariadb:11.4
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      MARIADB_DATABASE:            ${MOODLE_DB_NAME:-moodle}
+      MARIADB_USER:                ${MOODLE_DB_USER:-moodle}
+      MARIADB_PASSWORD:            ${MOODLE_DB_PASSWORD:?set MOODLE_DB_PASSWORD in .env}
+      MARIADB_RANDOM_ROOT_PASSWORD: "yes"
+    command:
+      # Moodle's documented MariaDB requirements.
+      - --innodb_file_per_table=1
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --max_allowed_packet=256M
+    volumes:
+      - db-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [internal]
+
+  # Uncomment together with MOODLE_SESSION_HANDLER=redis above.
+  # redis:
+  #   image: redis:7-alpine
+  #   restart: unless-stopped
+  #   command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "volatile-lru"]
+  #   healthcheck:
+  #     test: ["CMD", "redis-cli", "ping"]
+  #     interval: 5s
+  #     timeout: 3s
+  #     retries: 5
+  #   networks: [internal]
+
+volumes:
+  moodledata:
+  db-data:
+
+networks:
+  proxy:
+    external: true
+  internal:
+    driver: bridge

@@ -1,125 +1,115 @@
 #!/bin/sh
-set -e
-
 # =============================================================================
-# docker-entrypoint.sh — PHP Base Image (runs as www-data, non-root)
+# docker-entrypoint.sh — achelesstech/php-base (runs as www-data, non-root)
 # =============================================================================
-# 1. Applies runtime PHP overrides from ENV
-# 2. Toggles Xdebug / PCOV from ENV
-# 3. Renders the nginx vhost from the template selected by NGINX_PROFILE
-# 4. Runs child-image hooks from /docker-entrypoint.d/
-# 5. Hands off to CMD (supervisord)
+#   1. Render PHP ini overrides from env  -> /etc/php-runtime.d/zz-runtime.ini
+#   2. Render FPM pool overrides from env -> php-fpm.d/zz-runtime.conf
+#   3. Run application hooks              -> /docker-entrypoint.d/*.sh
+#   4. exec CMD (normally supervisord)
+#
+# It does NOT render an nginx vhost. The vhost is a static file owned by the
+# application image and copied to /etc/nginx/conf.d/.
 # =============================================================================
+set -eu
 
-# ── Runtime ENV overrides for PHP ────────────────────────────────────────────
-apply_runtime_php_overrides() {
-    INI="/usr/local/etc/php/conf.d/zz-runtime-overrides.ini"
-    CHANGED=false
+RUNTIME_INI="/etc/php-runtime.d/zz-runtime.ini"
+RUNTIME_FPM="/usr/local/etc/php-fpm.d/zz-runtime.conf"
 
-    : > "$INI"  # pre-created and www-data-owned at build time
+log() { echo "[entrypoint] $*"; }
+
+# ── PHP ini overrides ────────────────────────────────────────────────────────
+# /etc/php-runtime.d is the second entry in PHP_INI_SCAN_DIR, so anything
+# written here wins over the baked defaults in conf.d/zz-base.ini.
+render_php_overrides() {
+    : > "$RUNTIME_INI"
+    count=0
 
     for pair in \
         "PHP_MEMORY_LIMIT:memory_limit" \
         "PHP_UPLOAD_MAX_FILESIZE:upload_max_filesize" \
         "PHP_POST_MAX_SIZE:post_max_size" \
         "PHP_MAX_EXECUTION_TIME:max_execution_time" \
+        "PHP_MAX_INPUT_TIME:max_input_time" \
+        "PHP_MAX_INPUT_VARS:max_input_vars" \
+        "PHP_DATE_TIMEZONE:date.timezone" \
         "PHP_DISPLAY_ERRORS:display_errors" \
         "PHP_ERROR_REPORTING:error_reporting" \
         "PHP_SESSION_COOKIE_SECURE:session.cookie_secure" \
+        "PHP_SESSION_SAVE_HANDLER:session.save_handler" \
+        "PHP_SESSION_SAVE_PATH:session.save_path" \
+        "PHP_OPCACHE_ENABLE:opcache.enable" \
+        "PHP_OPCACHE_MEMORY:opcache.memory_consumption" \
+        "PHP_OPCACHE_MAX_FILES:opcache.max_accelerated_files" \
         "PHP_OPCACHE_VALIDATE_TIMESTAMPS:opcache.validate_timestamps"
     do
-        ENV_NAME="${pair%%:*}"
-        INI_KEY="${pair#*:}"
-        eval VAL="\${$ENV_NAME:-}"
-        if [ -n "$VAL" ]; then
-            echo "$INI_KEY = $VAL" >> "$INI"
-            CHANGED=true
-        fi
+        env_name="${pair%%:*}"
+        ini_key="${pair#*:}"
+        eval "value=\${${env_name}:-}"
+        [ -n "$value" ] || continue
+        printf '%s = %s\n' "$ini_key" "$value" >> "$RUNTIME_INI"
+        count=$((count + 1))
     done
 
-    # `$CHANGED && echo` returns 1 when false and aborts under `set -e` —
-    # use an explicit if instead.
-    if [ "$CHANGED" = "true" ]; then
-        echo "[entrypoint] Applied runtime PHP overrides"
+    [ "$count" -eq 0 ] || log "applied ${count} PHP ini override(s)"
+}
+
+# ── PHP-FPM pool overrides ───────────────────────────────────────────────────
+# Pool sizing is the single most deployment-specific setting in the image, so
+# it is runtime env rather than a build arg. Re-opening [www] appends to the
+# pool defined in www.conf; later keys win.
+render_fpm_overrides() {
+    : > "$RUNTIME_FPM"
+    body=""
+    count=0
+
+    for pair in \
+        "FPM_PM:pm" \
+        "FPM_MAX_CHILDREN:pm.max_children" \
+        "FPM_START_SERVERS:pm.start_servers" \
+        "FPM_MIN_SPARE_SERVERS:pm.min_spare_servers" \
+        "FPM_MAX_SPARE_SERVERS:pm.max_spare_servers" \
+        "FPM_MAX_REQUESTS:pm.max_requests" \
+        "FPM_PROCESS_IDLE_TIMEOUT:pm.process_idle_timeout" \
+        "FPM_REQUEST_TERMINATE_TIMEOUT:request_terminate_timeout" \
+        "FPM_SLOWLOG_TIMEOUT:request_slowlog_timeout"
+    do
+        env_name="${pair%%:*}"
+        key="${pair#*:}"
+        eval "value=\${${env_name}:-}"
+        [ -n "$value" ] || continue
+        body="${body}${key} = ${value}
+"
+        count=$((count + 1))
+    done
+
+    if [ "$count" -gt 0 ]; then
+        printf '[www]\n%s' "$body" > "$RUNTIME_FPM"
+        log "applied ${count} PHP-FPM pool override(s)"
     fi
 }
 
-# ── Enable Xdebug / PCOV if requested via ENV ───────────────────────────────
-toggle_debug_extensions() {
-    EXT_DIR="/usr/local/etc/php/conf.d"
-
-    if [ "${ENABLE_XDEBUG:-false}" = "true" ] && \
-       [ -f "$EXT_DIR/docker-php-ext-xdebug.ini.disabled" ]; then
-        cp "$EXT_DIR/docker-php-ext-xdebug.ini.disabled" \
-           "$EXT_DIR/docker-php-ext-xdebug.ini"
-        echo "[entrypoint] Xdebug ENABLED"
-    fi
-
-    if [ "${ENABLE_PCOV:-false}" = "true" ] && \
-       [ -f "$EXT_DIR/docker-php-ext-pcov.ini.disabled" ]; then
-        cp "$EXT_DIR/docker-php-ext-pcov.ini.disabled" \
-           "$EXT_DIR/docker-php-ext-pcov.ini"
-        echo "[entrypoint] PCOV ENABLED"
-    fi
+# ── Application hooks ────────────────────────────────────────────────────────
+# Read-only bind mounts frequently lose the exec bit, so fall back to `sh`.
+run_hooks() {
+    [ -d /docker-entrypoint.d ] || return 0
+    for hook in /docker-entrypoint.d/*.sh; do
+        [ -e "$hook" ] || continue
+        if [ -x "$hook" ]; then
+            log "running ${hook}"
+            "$hook"
+        else
+            log "running ${hook} (via sh — not executable)"
+            sh "$hook"
+        fi
+    done
 }
 
-# ── Render nginx vhost from platform template ───────────────────────────────
-# NGINX_PROFILE: generic | laravel | drupal | moodle (child images set this)
-# Document root resolution (explicit if/elif — the old &&/|| chain always
-# overwrote DOCUMENT_ROOT with the public dir):
-#   1. NGINX_DOCUMENT_ROOT env, if set
-#   2. APP_ROOT/APP_PUBLIC_DIR, if APP_PUBLIC_DIR is non-empty
-#   3. APP_ROOT
-render_nginx_vhost() {
-    PROFILE="${NGINX_PROFILE:-generic}"
-    TPL="/etc/nginx/templates/${PROFILE}.conf.tpl"
+# ── Main ─────────────────────────────────────────────────────────────────────
+log "$(cat /etc/php-base-release 2>/dev/null || echo 'php-base')"
 
-    if [ ! -f "$TPL" ]; then
-        echo "[entrypoint] WARNING: unknown NGINX_PROFILE '${PROFILE}', falling back to generic"
-        TPL="/etc/nginx/templates/generic.conf.tpl"
-    fi
+render_php_overrides
+render_fpm_overrides
+run_hooks
 
-    if [ -n "${NGINX_DOCUMENT_ROOT:-}" ]; then
-        DOCROOT="${NGINX_DOCUMENT_ROOT}"
-    elif [ -n "${APP_PUBLIC_DIR:-}" ]; then
-        DOCROOT="${APP_ROOT}/${APP_PUBLIC_DIR}"
-    else
-        DOCROOT="${APP_ROOT}"
-    fi
-
-    sed \
-        -e "s|@DOCROOT@|${DOCROOT}|g" \
-        -e "s|@FASTCGI_READ_TIMEOUT@|${NGINX_FASTCGI_READ_TIMEOUT:-300}|g" \
-        -e "s|@CLIENT_MAX_BODY_SIZE@|${NGINX_CLIENT_MAX_BODY_SIZE:-100M}|g" \
-        "$TPL" > /etc/nginx/conf.d/default.conf
-
-    echo "[entrypoint] Rendered nginx vhost: profile=${PROFILE} root=${DOCROOT}"
-}
-
-# ── Run child-image init scripts ─────────────────────────────────────────────
-run_entrypoint_hooks() {
-    if [ -d /docker-entrypoint.d/ ]; then
-        for f in /docker-entrypoint.d/*.sh; do
-            [ -e "$f" ] || continue
-            if [ -x "$f" ]; then
-                echo "[entrypoint] Running $f"
-                "$f"
-            else
-                # ro-mounted hooks are often not executable — run via sh
-                echo "[entrypoint] Running (sh) $f"
-                sh "$f"
-            fi
-        done
-    fi
-}
-
-# ── Execute ──────────────────────────────────────────────────────────────────
-echo "[entrypoint] PHP Base Image — starting"
-
-apply_runtime_php_overrides
-toggle_debug_extensions
-render_nginx_vhost
-run_entrypoint_hooks
-
-echo "[entrypoint] Handing off to: $*"
+log "exec: $*"
 exec "$@"

@@ -1,0 +1,134 @@
+# =============================================================================
+# Production — WordPress behind an external Traefik
+# =============================================================================
+#   docker compose -f compose.prod.yml up -d --build
+#   docker compose -f compose.prod.yml --profile ops run --rm install
+#   docker compose -f compose.prod.yml --profile ops run --rm wp plugin list
+# =============================================================================
+
+x-wp-env: &wp-env
+  env_file: .env
+  environment:
+    WORDPRESS_DB_HOST:     db
+    WORDPRESS_DB_NAME:     ${WORDPRESS_DB_NAME:-wordpress}
+    WORDPRESS_DB_USER:     ${WORDPRESS_DB_USER:-wordpress}
+    WORDPRESS_DB_PASSWORD: ${WORDPRESS_DB_PASSWORD:?set WORDPRESS_DB_PASSWORD in .env}
+    WORDPRESS_URL:         ${WORDPRESS_URL:?set WORDPRESS_URL in .env, e.g. https://example.com}
+    PHP_MEMORY_LIMIT:        256M
+    PHP_UPLOAD_MAX_FILESIZE: 128M
+    PHP_POST_MAX_SIZE:       128M
+    PHP_OPCACHE_VALIDATE_TIMESTAMPS: "0"
+    FPM_MAX_CHILDREN: "16"
+
+services:
+  app:
+    build:
+      context: .
+      target: wordpress
+    image: ghcr.io/achelesstech/wordpress-app:latest
+    restart: unless-stopped
+    <<: *wp-env
+    volumes:
+      # Only uploads are state. Core, themes and plugins come from the image.
+      - wp-uploads:/var/www/html/wp-content/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [proxy, internal]
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+      - traefik.http.services.wordpress.loadbalancer.server.port=8080
+      # - traefik.http.routers.wordpress.rule=Host(`example.com`)
+      # - traefik.http.routers.wordpress.entrypoints=websecure
+      # - traefik.http.routers.wordpress.tls.certresolver=letsencrypt
+
+  # WordPress needs wp-cron. The default "run it on page views" behaviour is
+  # unreliable on a low-traffic site and slow on a busy one, so disable it with
+  # DISABLE_WP_CRON and run it properly here.
+  cron:
+    image: ghcr.io/achelesstech/wordpress-app:latest
+    restart: unless-stopped
+    command:
+      - /bin/sh
+      - -c
+      - 'while true; do wp cron event run --due-now || true; sleep 60; done'
+    <<: *wp-env
+    volumes:
+      - wp-uploads:/var/www/html/wp-content/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [internal]
+    # No nginx in this container, so the image healthcheck cannot pass.
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'sleep 60' >/dev/null || pgrep -f wp >/dev/null || exit 1"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+
+  install:
+    image: ghcr.io/achelesstech/wordpress-app:latest
+    <<: *wp-env
+    environment:
+      WORDPRESS_RUN_INSTALL:   "true"
+      WORDPRESS_SITE_TITLE:    ${WORDPRESS_SITE_TITLE:-WordPress}
+      WORDPRESS_ADMIN_USER:    ${WORDPRESS_ADMIN_USER:-admin}
+      WORDPRESS_ADMIN_PASSWORD: ${WORDPRESS_ADMIN_PASSWORD:?set in .env}
+      WORDPRESS_ADMIN_EMAIL:   ${WORDPRESS_ADMIN_EMAIL:?set in .env}
+    command: ["wp", "core", "is-installed"]
+    volumes:
+      - wp-uploads:/var/www/html/wp-content/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [internal]
+    healthcheck:
+      disable: true
+    profiles: [ops]
+
+  # docker compose -f compose.prod.yml --profile ops run --rm wp <command>
+  wp:
+    image: ghcr.io/achelesstech/wordpress-app:latest
+    entrypoint: ["wp"]
+    <<: *wp-env
+    volumes:
+      - wp-uploads:/var/www/html/wp-content/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [internal]
+    healthcheck:
+      disable: true
+    profiles: [ops]
+
+  db:
+    image: mariadb:11.4
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      MARIADB_DATABASE:             ${WORDPRESS_DB_NAME:-wordpress}
+      MARIADB_USER:                 ${WORDPRESS_DB_USER:-wordpress}
+      MARIADB_PASSWORD:             ${WORDPRESS_DB_PASSWORD:?set WORDPRESS_DB_PASSWORD in .env}
+      MARIADB_RANDOM_ROOT_PASSWORD: "yes"
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - db-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [internal]
+
+volumes:
+  wp-uploads:
+  db-data:
+
+networks:
+  proxy:
+    external: true
+  internal:
+    driver: bridge

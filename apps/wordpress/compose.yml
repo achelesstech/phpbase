@@ -1,0 +1,69 @@
+# =============================================================================
+# Local development — WordPress
+# =============================================================================
+#   docker compose up -d --build     → http://localhost:8081
+#   docker compose --profile tools run --rm wp plugin list
+# =============================================================================
+
+x-wp-env: &wp-env
+  environment:
+    WORDPRESS_DB_HOST:     db
+    WORDPRESS_DB_NAME:     wordpress
+    WORDPRESS_DB_USER:     wordpress
+    WORDPRESS_DB_PASSWORD: wordpress
+    WORDPRESS_URL:         http://localhost:8081
+    WORDPRESS_ALLOW_UPDATES: "true"
+    PHP_SESSION_COOKIE_SECURE: "0"
+    PHP_OPCACHE_VALIDATE_TIMESTAMPS: "1"
+    PHP_DISPLAY_ERRORS: "On"
+    PHP_MEMORY_LIMIT: 512M
+
+services:
+  app:
+    build:
+      context: .
+      target: dev
+    ports:
+      - "8081:8080"
+    <<: *wp-env
+    volumes:
+      - wp-uploads:/var/www/html/wp-content/uploads
+      # Develop your own theme/plugin against the container:
+      # - ./wp-content/themes/mytheme:/var/www/html/wp-content/themes/mytheme
+    depends_on:
+      db:
+        condition: service_healthy
+
+  wp:
+    build:
+      context: .
+      target: dev
+    entrypoint: ["wp"]
+    <<: *wp-env
+    volumes:
+      - wp-uploads:/var/www/html/wp-content/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    profiles: [tools]
+
+  db:
+    image: mariadb:11.4
+    environment:
+      MARIADB_DATABASE:             wordpress
+      MARIADB_USER:                 wordpress
+      MARIADB_PASSWORD:             wordpress
+      MARIADB_RANDOM_ROOT_PASSWORD: "yes"
+    volumes:
+      - db-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  wp-uploads:
+  db-data:

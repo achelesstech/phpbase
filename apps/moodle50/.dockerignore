@@ -1,0 +1,4 @@
+# Moodle source is downloaded during the build, so the context only needs
+# docker/. Everything else is noise.
+*
+!docker/

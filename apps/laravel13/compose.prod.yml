@@ -1,0 +1,126 @@
+# =============================================================================
+# Production — Laravel 13 behind an external Traefik
+# =============================================================================
+#   docker compose -f compose.prod.yml up -d
+#   docker compose -f compose.prod.yml --profile ops run --rm migrate
+#
+# No `ports:` on the app — Traefik reaches it on the shared `proxy` network.
+# TLS, HSTS and redirects are Traefik's job, not this image's.
+# =============================================================================
+
+x-app-env: &app-env
+  env_file: .env
+  environment:
+    APP_ENV:   production
+    APP_DEBUG: "false"
+    PHP_OPCACHE_VALIDATE_TIMESTAMPS: "0"
+    PHP_MEMORY_LIMIT: 256M
+    # Size the pool to the container. Rough rule:
+    #   max_children ~= (memory limit - 128M) / average request RSS
+    FPM_MAX_CHILDREN: "16"
+    FPM_MAX_REQUESTS: "500"
+
+# Only storage/app holds real state. bootstrap/cache is deliberately NOT a
+# volume: the caches are baked into the image, and a persistent volume would
+# shadow them with a stale copy that survives every deploy.
+x-app-volumes: &app-volumes
+  volumes:
+    - app-storage:/var/www/html/storage/app
+
+services:
+  app:
+    build:
+      context: .
+      target: production
+    image: ghcr.io/achelesstech/laravel13-app:latest
+    restart: unless-stopped
+    <<: [*app-env, *app-volumes]
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [proxy, internal]
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+      - traefik.http.services.laravel13.loadbalancer.server.port=8080
+      # - traefik.http.routers.laravel13.rule=Host(`app.example.com`)
+      # - traefik.http.routers.laravel13.entrypoints=websecure
+      # - traefik.http.routers.laravel13.tls.certresolver=letsencrypt
+
+  queue:
+    image: ghcr.io/achelesstech/laravel13-app:latest
+    restart: unless-stopped
+    command: ["php", "artisan", "queue:work", "--sleep=3", "--tries=3", "--max-time=3600"]
+    <<: [*app-env, *app-volumes]
+    environment:
+      # Never let a worker race the app over bootstrap/cache.
+      LARAVEL_SKIP_CACHE: "1"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [internal]
+    # This container runs no nginx, so the image healthcheck (which curls
+    # /fpm-ping) can never pass. Replace it with a process check.
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'queue:work' >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  scheduler:
+    image: ghcr.io/achelesstech/laravel13-app:latest
+    restart: unless-stopped
+    command: ["php", "artisan", "schedule:work"]
+    <<: [*app-env, *app-volumes]
+    environment:
+      LARAVEL_SKIP_CACHE: "1"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'schedule:work' >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # One-shot. Migrations belong in a deliberate step, not in every replica's
+  # entrypoint where they would run concurrently.
+  migrate:
+    image: ghcr.io/achelesstech/laravel13-app:latest
+    command: ["php", "artisan", "migrate", "--force"]
+    <<: [*app-env, *app-volumes]
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [internal]
+    healthcheck:
+      disable: true
+    profiles: [ops]
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POSTGRES_DB:       ${DB_DATABASE:-laravel}
+      POSTGRES_USER:     ${DB_USERNAME:-laravel}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-laravel} -d ${DB_DATABASE:-laravel}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [internal]
+
+volumes:
+  app-storage:
+  db-data:
+
+networks:
+  proxy:
+    external: true
+  internal:
+    driver: bridge

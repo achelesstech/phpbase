@@ -1,0 +1,76 @@
+# =============================================================================
+# Local development — Drupal 11
+# =============================================================================
+#   docker compose up -d          → http://localhost:8080
+#   docker compose run --rm drush status
+# =============================================================================
+
+x-dev-env: &dev-env
+  env_file: .env
+  environment:
+    PHP_SESSION_COOKIE_SECURE: "0"
+    PHP_OPCACHE_VALIDATE_TIMESTAMPS: "1"
+    PHP_DISPLAY_ERRORS: "On"
+    PHP_MEMORY_LIMIT: 512M
+    DRUPAL_REVERSE_PROXY: "false"
+
+services:
+  app:
+    build:
+      context: .
+      target: dev
+    ports:
+      - "8080:8080"
+    <<: *dev-env
+    volumes:
+      - ./:/var/www/html
+    depends_on:
+      db:
+        condition: service_healthy
+
+  drush:
+    build:
+      context: .
+      target: dev
+    entrypoint: ["./vendor/bin/drush"]
+    <<: *dev-env
+    volumes:
+      - ./:/var/www/html
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    profiles: [tools]
+
+  composer:
+    build:
+      context: .
+      target: dev
+    entrypoint: ["composer"]
+    environment:
+      COMPOSER_MEMORY_LIMIT: "-1"
+    volumes:
+      - ./:/var/www/html
+    healthcheck:
+      disable: true
+    profiles: [tools]
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB:       ${DRUPAL_DB_NAME:-drupal}
+      POSTGRES_USER:     ${DRUPAL_DB_USER:-drupal}
+      POSTGRES_PASSWORD: ${DRUPAL_DB_PASSWORD:-drupal}
+    ports:
+      - "5433:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DRUPAL_DB_USER:-drupal} -d ${DRUPAL_DB_NAME:-drupal}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  db-data:

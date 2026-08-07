@@ -1,54 +1,8 @@
 # =============================================================================
-# .dockerignore — PHP Base Image
+# .dockerignore — achelesstech/php-base
 # =============================================================================
+# The build context is ONLY the Dockerfile plus rootfs/. Everything else is
+# documentation, CI, or the application templates.
 
-# VCS
-.git
-.gitignore
-.gitattributes
-
-# CI/CD
-.github
-.gitlab-ci.yml
-.circleci
-Jenkinsfile
-
-# Docker
-docker-compose*.yml
-Dockerfile.*
-!Dockerfile
-
-# Documentation
-*.md
-!README.md
-LICENSE
-
-# IDE
-.idea
-.vscode
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Testing
-tests/
-phpunit.xml
-phpunit.xml.dist
-phpstan.neon
-.phpcs.xml
-
-# Node (if accidentally present)
-node_modules
-npm-debug.log
-
-# Logs
-*.log
-
-# Environment files
-.env
-.env.*
-!.env.example
+*
+!rootfs/

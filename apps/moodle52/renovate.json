@@ -1,0 +1,14 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "labels": ["dependencies"],
+  "packageRules": [
+    {
+      "description": "Keep the php-base digest current. This is the CVE patch path: the base is rebuilt weekly, Renovate opens the bump here.",
+      "matchPackageNames": ["ghcr.io/achelesstech/php-base"],
+      "pinDigests": true,
+      "automerge": false,
+      "schedule": ["after 6am on monday"]
+    }
+  ]
+}
