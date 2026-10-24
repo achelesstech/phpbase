@@ -18,7 +18,8 @@ networks:
 
   # Traefik <-> socket-proxy only. `internal: true` means no gateway and no
   # route off the host: if the socket proxy is ever compromised it cannot call
-  # out.
+  # out. It is also the proxy's only network, so nothing outside it can reach
+  # the proxy at all.
   socket:
     name: traefik-socket
     internal: true
@@ -34,45 +35,43 @@ services:
   # API behind it. Traefik is the most exposed process here, so it does not get
   # that.
   #
-  # Everything is 0 by default in this image; only what Traefik uses is on.
+  # wollomatic/socket-proxy is a single static Go binary. It refuses every
+  # request that no allow rule matches, so only the GETs listed below get
+  # through: no POST, PUT or DELETE at all, hence no create, start, exec or
+  # kill. It replaced tecnativa/docker-socket-proxy, which is haproxy with an
+  # entrypoint that renders its config on every start and so needs root and a
+  # writable root filesystem. This one runs read-only, non-root and with no
+  # capabilities, like traefik below.
+  #
+  # Tag for reading, digest for pinning. Upgrade both together.
   socket-proxy:
-    image: tecnativa/docker-socket-proxy:0.3.0
+    image: wollomatic/socket-proxy:1.13.2@sha256:ff95d6ff6c27853005ef85eb8f4ab5923dc3d2f1e055f98fb6aeeaceec3fe848
     container_name: traefik-socket-proxy
     restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
-    # No read_only here, unlike traefik below. This image is haproxy, and its
-    # entrypoint renders /usr/local/etc/haproxy/haproxy.cfg from the environment
-    # on every start. A read-only root crash-loops on "can't create ...
-    # haproxy.cfg", and tmpfs-ing that directory instead masks the
-    # haproxy.cfg.template the image ships, which fails the same way one line
-    # later. Both were tried. The container holds no secrets and exposes only a
-    # GET-filtered API on an internal network.
-    environment:
-      CONTAINERS: 1     # GET /containers/... — the whole point
-      NETWORKS:   1     # resolve which network to reach a container on
-      EVENTS:     1     # watch for start/stop, otherwise routing goes stale
-      PING:       1
-      VERSION:    1
-      # Explicitly off — these are the dangerous ones.
-      POST:       0     # no create/start/exec/kill. Without this the proxy
-                        # is barely better than the raw socket.
-      IMAGES:     0
-      VOLUMES:    0
-      EXEC:       0
-      BUILD:      0
-      COMMIT:     0
-      CONFIGS:    0
-      SECRETS:    0
-      SERVICES:   0
-      SWARM:      0
-      SYSTEM:     0
-      TASKS:      0
-      NODES:      0
-      PLUGINS:    0
-      INFO:       0
-      AUTH:       0
-      DISTRIBUTION: 0
-      SESSION:    0
+    # nobody, plus the group that owns the socket on this host, which is the
+    # only thing it needs to read /var/run/docker.sock. The GID differs between
+    # hosts, so it comes from .env.
+    user: "65534:65534"
+    group_add:
+      - "${DOCKER_GID:?set DOCKER_GID in .env to the output of: stat -c %g /var/run/docker.sock}"
+    command:
+      # Listen on all of the container's addresses. Its only network is
+      # `socket`, so this is the internal network and nothing else.
+      - -listenip=0.0.0.0
+      # Answer only Traefik, looked up by name on the socket network. Any other
+      # client, even one attached to the socket network, gets 403.
+      - -allowfrom=traefik
+      # GET only, and only what the Docker provider reads: the API version
+      # (optionally prefixed, e.g. /v1.47), ping, the container list and each
+      # container's inspect, the event stream, and networks. Anchored at both
+      # ends by the proxy, so /containers/<id>/logs, /archive and /export stay
+      # closed. Traefik's client tries HEAD /_ping first, so each Traefik start
+      # logs one 'blocked request ... method=HEAD URL=/_ping' here; it then
+      # falls back to GET. That line is expected.
+      - '-allowGET=(/v1\.[0-9]+)?/(version|_ping|containers/json|containers/[^/]+/json|events|networks|networks/[^/]+)'
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks: [socket]
