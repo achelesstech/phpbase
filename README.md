@@ -50,13 +50,14 @@ file and opens its compiled-in default error log as a side effect; when the
 build step runs as root that bakes root-owned files into the image and nginx
 then cannot start as www-data at runtime. The wrapper cleans up after itself.
 
-Working templates for Laravel 11/13, Drupal 11, Moodle 5.0/5.2 and WordPress
-are in [`apps/`](apps/). Copy one into the application repository.
+Working templates for Laravel 13, Drupal 11, Moodle 5.2 and WordPress
+are in [`examples/`](examples/). Copy one into the application repository.
 
 **Behind Traefik and Cloudflare?** Read
 [`docs/reverse-proxy.md`](docs/reverse-proxy.md) before going live. A complete,
-hardened Traefik deployment — static config, dynamic config, compose, and a
-labels reference for app repos — is in [`traefik/`](traefik/). It lives here
+hardened Traefik deployment — static config, dynamic config, compose — is in
+[`examples/traefik/`](examples/traefik/), and the labels reference for app
+repos is [`docs/traefik/labels.md`](docs/traefik/labels.md). It lives here
 temporarily and will move to its own repository; nothing in this image depends
 on it.
 
@@ -65,7 +66,7 @@ on it.
 1. **Provide `/etc/nginx/conf.d/vhost.conf`** with exactly one `server{}` block
    listening on `8080`.
 2. **That vhost must define `/fpm-ping`** on `127.0.0.1` — the image
-   `HEALTHCHECK` uses it. Copy the block from any template in `apps/`.
+   `HEALTHCHECK` uses it. Copy the block from any template in `examples/`.
 
 ## Tags
 
@@ -87,8 +88,8 @@ CI needs two repository secrets to push:
 
 Use an access token, never the account password — a token is scoped and can be
 revoked on its own. The same two secrets are expected by every app repo built
-from [`apps/`](apps/). Pull is anonymous; nothing needs a login to consume the
-image, though authenticated pulls get a higher rate limit.
+from [`examples/`](examples/). Pull is anonymous; nothing needs a login to
+consume the image, though authenticated pulls get a higher rate limit.
 
 ## What's inside
 
@@ -105,7 +106,7 @@ why they are not recompiled here.
 
 Xdebug and PCOV are **not** included. They were the only reason
 `/usr/local/etc/php/conf.d` had to be writable by the runtime user. Add them in
-a `dev` build stage in the app repo instead — see `apps/laravel13/Dockerfile`.
+a `dev` build stage in the app repo instead — see `examples/laravel/Dockerfile`.
 
 **Also present:** nginx, supervisor, tini, curl, composer 2.8.
 
@@ -175,7 +176,7 @@ writable layer. PHP-FPM error and access logs go to `/proc/self/fd/{1,2}`.
 
 **Workers.** Containers that override `CMD` (`queue:work`, cron, …) run no
 nginx, so the image healthcheck cannot pass. Replace or disable it in compose —
-every template in `apps/` shows this.
+every template in `examples/` shows this.
 
 **Client IP.** nginx trusts `X-Forwarded-For` from RFC1918 and applies
 `real_ip_recursive`, so `REMOTE_ADDR` inside PHP is the real client. Without it
@@ -222,9 +223,10 @@ rootfs/
   usr/local/bin/supervisor-fatal-listener.sh
   usr/local/etc/php/conf.d/zz-base.ini
   usr/local/etc/php-fpm.d/www.conf
-apps/                                     templates to copy into app repos
-traefik/                                  the edge proxy (temporary home)
+examples/                                 templates to copy into app repos
+examples/traefik/                         the edge proxy (temporary home)
 docs/reverse-proxy.md                     Traefik + Cloudflare
+docs/traefik/                             the edge proxy's labels, static config, VPS setup
 test/                                     fixture app + behavioural test suite
 .github/workflows/build-base.yml
 ```
