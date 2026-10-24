@@ -22,22 +22,16 @@ IMAGE      ?= local/php-base
 PHP_ALL    ?= $(shell jq -r '.php[] | select((.prerelease // false) | not) | .line' versions.json)
 TAG        := $(IMAGE):$(PHP)
 DEV_TAG    := $(IMAGE):$(PHP)-dev
-UPSTREAM   := $(if $(filter 8.6,$(PHP)),php:$(PHP)-rc-fpm-alpine,php:$(PHP)-fpm-alpine)
-
-BUILD_ARGS = \
-	--build-arg PHP_VERSION=$(PHP) \
-	--build-arg PHP_IMAGE=$(UPSTREAM) \
-	--build-arg BASE_NAME=docker.io/library/$(UPSTREAM) \
-	--build-arg BASE_VERSION=$(PHP)-local \
-	--build-arg BUILD_DATE=$(shell date -u +%Y-%m-%dT%H:%M:%SZ) \
-	--build-arg VCS_REF=$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown) \
-	--build-arg PKG_CACHE_BUST=$(shell date -u +%Y%m%d)
 
 .PHONY: build build-all test test-frameworks resolve lint scan shell clean
 
+# Pinned inputs from the resolver (cached per day; REFRESH=1 re-resolves).
+# Resolved once, so runtime and dev get the identical argument list.
 build:
-	docker buildx build $(BUILD_ARGS) --target runtime -t $(TAG) --load .
-	docker buildx build $(BUILD_ARGS) --target dev -t $(DEV_TAG) --load .
+	@args="$$(./scripts/build-args.sh $(PHP))" || exit 1; \
+	set -x; \
+	docker buildx build $$args --target runtime -t $(TAG) --load . && \
+	docker buildx build $$args --target dev -t $(DEV_TAG) --load .
 
 build-all:
 	@for v in $(PHP_ALL); do $(MAKE) --no-print-directory build PHP=$$v || exit 1; done
@@ -50,7 +44,7 @@ test-frameworks: build
 	./test/frameworks/run.sh $(TAG) '$(shell jq -c --arg l $(PHP) '.php[] | select(.line == $$l) | .frameworks' versions.json)'
 
 resolve:
-	./scripts/resolve-matrix.sh | sed -n 's/^lines=//p' | jq '.[] | {line, php_version, alpine_full, tags}'
+	./scripts/resolve-matrix.sh | sed -n 's/^lines=//p' | jq '.[] | {line, php_version, alpine_full, alpine_image, build_tag, tags}'
 
 # Same configs CI uses.
 lint:
@@ -61,7 +55,7 @@ lint:
 		rootfs/usr/local/bin/php-base-every rootfs/usr/local/bin/php-base-info \
 		rootfs/usr/local/bin/php-base-validate rootfs/usr/local/bin/nginx-validate.sh
 	docker run --rm -v "$(CURDIR):/src:ro" -w /src koalaman/shellcheck:v0.11.0 -S warning -x -s bash \
-		scripts/*.sh test/*.sh test/runtime/*.sh test/frameworks/*.sh
+		scripts/*.sh scripts/lib/*.sh test/*.sh test/runtime/*.sh test/scripts/*.sh test/frameworks/*.sh
 
 scan:
 	trivy image --severity HIGH,CRITICAL --ignore-unfixed $(TAG)
