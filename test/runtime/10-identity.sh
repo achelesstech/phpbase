@@ -1,5 +1,6 @@
 # shellcheck shell=bash
-# identity — PHP line, user, home, file ownership, version reporting, composer.
+# identity — PHP line, user, home, file ownership, version reporting.
+# (Composer is a -dev tool now: test/run-dev.sh checks it.)
 # shellcheck disable=SC2154  # body is set by 00-boot.sh.
 
 info "identity and versions"
@@ -21,6 +22,3 @@ else
 fi
 docker exec "$APP" php-base-info --json | docker exec -i "$APP" php -r 'exit(json_decode(stream_get_contents(STDIN), true)["php"] === PHP_VERSION ? 0 : 1);' \
     && ok "php-base-info --json reports the running PHP version" || bad "php-base-info --json is wrong"
-composer_v="$(docker exec "$APP" composer --version --no-ansi 2>/dev/null | awk '{print $3}')"
-docker exec "$APP" php -r 'exit(version_compare($argv[1], "2.9.3", ">=") ? 0 : 1);' "$composer_v" \
-    && ok "composer ${composer_v} (>= 2.9.3, Drupal's recommended minimum)" || bad "composer is ${composer_v}"

@@ -1,6 +1,8 @@
 # Drupal smoke-test app — also the minimal reference for a Drupal image.
 ARG BASE_IMAGE
-FROM ${BASE_IMAGE} AS build
+ARG BASE_DEV_IMAGE
+# Composer is in the -dev image only, so the composer stage builds FROM it.
+FROM ${BASE_DEV_IMAGE} AS build
 ARG DRUPAL_SPEC=drupal/recommended-project:^11
 RUN set -eux; \
     composer create-project --no-interaction --prefer-dist --no-progress "${DRUPAL_SPEC}" /tmp/app; \

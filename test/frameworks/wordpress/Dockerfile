@@ -1,7 +1,12 @@
 # WordPress smoke-test app — also the minimal reference for a WordPress image.
 ARG BASE_IMAGE
+# Not used (WordPress needs no composer stage); declared so every fixture
+# takes the same arguments.
+ARG BASE_DEV_IMAGE
 FROM ${BASE_IMAGE}
 ARG WP_VERSION=latest
+# `curl | tar` below must fail when curl does.
+SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 USER root
 RUN set -eux; \
     curl -fsSL "https://wordpress.org/wordpress-${WP_VERSION}.tar.gz" | tar xz --strip-components=1 -C /var/www/html; \

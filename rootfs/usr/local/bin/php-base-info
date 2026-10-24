@@ -13,6 +13,7 @@ set -eu
 
 RELEASE=/etc/php-base/release
 BASE_VERSION=unknown VARIANT=unknown BUILD_DATE=unknown VCS_REF=unknown BASE_NAME=unknown BASE_DIGEST=unknown
+UPSTREAM_IMAGE=unknown UPSTREAM_DIGEST=unknown
 # shellcheck disable=SC1090
 [ ! -r "$RELEASE" ] || . "$RELEASE"
 
@@ -27,21 +28,27 @@ case "${1:-}" in
 esac
 
 nginx_version="$(nginx -v 2>&1 | sed 's#^.*/##')"
-composer_version="$(composer --version --no-ansi 2>/dev/null | awk '{print $3}')"
+# Composer is in the -dev image only.
+composer_version=""
+if command -v composer >/dev/null 2>&1; then
+    composer_version="$(composer --version --no-ansi 2>/dev/null | awk '{print $3}')"
+fi
 
 if [ "${1:-}" = "--json" ]; then
     php -r '
-        [, $base, $variant, $date, $ref, $bname, $bdigest, $alpine, $nginx, $composer] = $argv;
+        [, $base, $variant, $date, $ref, $uname, $udigest, $bname, $bdigest, $alpine, $nginx, $composer] = $argv;
         $ext = [];
         foreach (get_loaded_extensions() as $e) { $ext[strtolower($e)] = phpversion($e) ?: null; }
         ksort($ext);
         echo json_encode([
             "base_version" => $base, "variant" => $variant, "build_date" => $date, "vcs_ref" => $ref,
-            "upstream" => ["name" => $bname, "digest" => $bdigest],
-            "php" => PHP_VERSION, "alpine" => $alpine, "nginx" => $nginx, "composer" => $composer,
+            "upstream" => ["name" => $uname, "digest" => $udigest],
+            "base" => ["name" => $bname, "digest" => $bdigest],
+            "php" => PHP_VERSION, "alpine" => $alpine, "nginx" => $nginx, "composer" => $composer === "" ? null : $composer,
             "extensions" => $ext,
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES), "\n";
-    ' "$BASE_VERSION" "$VARIANT" "$BUILD_DATE" "$VCS_REF" "$BASE_NAME" "$BASE_DIGEST" \
+    ' "$BASE_VERSION" "$VARIANT" "$BUILD_DATE" "$VCS_REF" "$UPSTREAM_IMAGE" "$UPSTREAM_DIGEST" \
+      "$BASE_NAME" "$BASE_DIGEST" \
       "$alpine" "$nginx_version" "$composer_version"
     exit 0
 fi
@@ -49,10 +56,11 @@ fi
 printf '%-12s %s\n' \
     image      "php-base ${BASE_VERSION} (${VARIANT})" \
     built      "${BUILD_DATE} from ${VCS_REF}" \
-    upstream   "${BASE_NAME}@${BASE_DIGEST}" \
+    upstream   "${UPSTREAM_IMAGE}@${UPSTREAM_DIGEST}" \
+    base       "${BASE_NAME}@${BASE_DIGEST}" \
     php        "$php_version" \
     alpine     "$alpine" \
-    nginx      "$nginx_version" \
-    composer   "$composer_version"
+    nginx      "$nginx_version"
+[ -z "$composer_version" ] || printf '%-12s %s\n' composer "$composer_version"
 echo "extensions:"
 php -r '$e = get_loaded_extensions(); natcasesort($e); foreach ($e as $x) printf("  %-16s %s\n", strtolower($x), phpversion($x) ?: "");'

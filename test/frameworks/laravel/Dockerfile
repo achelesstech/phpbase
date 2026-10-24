@@ -1,6 +1,8 @@
 # Laravel smoke-test app — also the minimal reference for a Laravel image.
 ARG BASE_IMAGE
-FROM ${BASE_IMAGE} AS build
+ARG BASE_DEV_IMAGE
+# Composer is in the -dev image only, so the composer stage builds FROM it.
+FROM ${BASE_DEV_IMAGE} AS build
 ARG LARAVEL_SPEC=laravel/laravel:^13.0
 # Runs as www-data: create-project generates .env and APP_KEY, creates the
 # SQLite database and migrates it.

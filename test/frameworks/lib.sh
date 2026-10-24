@@ -30,9 +30,11 @@ fw_cleanup() {
 trap fw_cleanup EXIT
 docker network create --label "$FW_LABEL" "$FW_NET" >/dev/null
 
-# fw_build <tag> <context-dir> [--build-arg …]
+# fw_build <tag> <context-dir> [--build-arg …] — also passes BASE_DEV_IMAGE,
+# the -dev twin of $IMAGE, which the fixtures' composer stages build FROM.
 fw_build() {
     local tag="$1" dir="$2"; shift 2
+    set -- --build-arg "BASE_DEV_IMAGE=${IMAGE}-dev" "$@"
     FW_IMAGES+=("$tag")
     if docker build --quiet "$@" -t "$tag" "$dir" >/dev/null; then
         ok "app image builds (root-owned code, preset vhost, nginx-validate.sh)"

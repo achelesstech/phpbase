@@ -122,9 +122,16 @@ while IFS= read -r entry; do
     # Which Alpine is inside? Read it from the image itself. (The Hub tags API
     # is no shortcut: docker-library pushes the floating and the patch tags as
     # separate indexes, so their digests do not match.)
-    alpine_full="$(docker run --rm --quiet --platform linux/amd64 --entrypoint cat "${upstream}@${digest}" /etc/alpine-release)"
-    alpine="$(cut -d. -f1,2 <<<"$alpine_full")"
+    # The MINOR comes from the PHP image: its binaries need that Alpine branch.
+    upstream_alpine="$(docker run --rm --quiet --platform linux/amd64 --entrypoint cat "${upstream}@${digest}" /etc/alpine-release)"
+    alpine="$(cut -d. -f1,2 <<<"$upstream_alpine")"
     alpine_digest="$(digest_of "alpine:${alpine}")"
+    # The full version comes from the Alpine image the runtime is built FROM:
+    # after an Alpine point release, alpine:<minor> moves before docker-library
+    # rebuilds the PHP image, so the two can differ by a point release.
+    alpine_full="$(docker run --rm --quiet --platform linux/amd64 --entrypoint cat "alpine:${alpine}@${alpine_digest}" /etc/alpine-release)"
+    [[ "$alpine_full" == "${alpine}".* ]] \
+        || { error "alpine:${alpine}@${alpine_digest:0:19}… is Alpine ${alpine_full}, not ${alpine}.x"; exit 1; }
 
     # ── Freshness guards ────────────────────────────────────────────────────
     updated=unknown
