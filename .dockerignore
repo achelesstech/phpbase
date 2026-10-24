@@ -1,8 +1,8 @@
 # =============================================================================
 # .dockerignore — achelesstech/php-base
 # =============================================================================
-# The build context is ONLY the Dockerfile plus rootfs/. Everything else is
-# documentation, CI, or the application templates.
-
+# The build context is ONLY the Dockerfile plus rootfs/ and rootfs-dev/.
+# Everything else is documentation, CI, tests or the application templates.
 *
 !rootfs/
+!rootfs-dev/

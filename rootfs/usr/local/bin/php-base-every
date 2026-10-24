@@ -1,0 +1,116 @@
+#!/bin/sh
+# =============================================================================
+# php-base-every — run a command every N seconds (the container-native cron)
+# =============================================================================
+#   php-base-every [--name NAME] [--no-align] [--once] SECONDS [--] COMMAND [ARG…]
+#
+#   php-base-every 60   php artisan schedule:run
+#   php-base-every 300  vendor/bin/drush cron
+#   php-base-every 60   wp cron event run --due-now
+#   php-base-every 60   php public/admin/cli/cron.php
+#
+# Every app here needs one of these, and each template used to hand-roll
+# `while true; do …; sleep 60; done`, which drifts (the period becomes 60s +
+# runtime), ignores SIGTERM until the sleep ends, and cannot be health-checked.
+#
+#   * Aligned: runs at multiples of SECONDS on the wall clock (:00 of every
+#     minute for 60), which is what Laravel's schedule:run expects.
+#     --no-align runs immediately, then every SECONDS after each start.
+#   * Never overlaps: a run longer than the interval skips the missed ticks.
+#   * SIGTERM: stops scheduling; a run in progress is allowed to finish.
+#   * Heartbeat: /tmp/php-base/heartbeat.NAME is touched at start and after
+#     every SUCCESSFUL run; healthcheck.sh turns a stale heartbeat into
+#     "unhealthy" (HEALTHCHECK_MODE=auto picks this up by itself).
+# =============================================================================
+set -u
+
+NAME=job
+ALIGN=1
+ONCE=0
+
+usage() { sed -n '4,9p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --name)     NAME="${2:?--name needs a value}"; shift 2 ;;
+        --no-align) ALIGN=0; shift ;;
+        --once)     ONCE=1; shift ;;
+        -h|--help)  usage ;;
+        *)          break ;;
+    esac
+done
+
+INTERVAL="${1:-}"
+case "$INTERVAL" in ''|*[!0-9]*) usage ;; esac
+[ "$INTERVAL" -ge 1 ] || usage
+shift
+[ "${1:-}" != "--" ] || shift
+[ $# -gt 0 ] || usage
+
+HEARTBEAT="/tmp/php-base/heartbeat.${NAME}"
+log() { echo "[every:${NAME}] $*"; }
+
+stopping=0
+child=0
+on_term() {
+    stopping=1
+    [ "$child" -eq 0 ] || log "stop requested — letting the current run finish"
+}
+trap on_term TERM INT
+
+beat() { printf '%s\n' "$INTERVAL" > "$HEARTBEAT" 2>/dev/null || true; }
+
+run_once() {
+    started="$(date +%s)"
+    "$@" &
+    child=$!
+    while :; do
+        wait "$child"
+        rc=$?
+        # wait returns early (>128) when a trapped signal arrives; the child
+        # is still running, so keep waiting for its real exit status.
+        kill -0 "$child" 2>/dev/null || break
+    done
+    child=0
+    took=$(( $(date +%s) - started ))
+    if [ "$rc" -eq 0 ]; then
+        beat
+    else
+        log "exit ${rc} after ${took}s: $*"
+    fi
+    if [ "$took" -gt "$INTERVAL" ]; then
+        log "run took ${took}s, longer than the ${INTERVAL}s interval — missed ticks are skipped, not queued"
+    fi
+    return "$rc"
+}
+
+nap() {
+    # Background sleep + wait, so SIGTERM interrupts the nap immediately.
+    sleep "$1" &
+    nap_pid=$!
+    wait "$nap_pid" 2>/dev/null || kill "$nap_pid" 2>/dev/null || true
+}
+
+beat
+if [ "$ONCE" -eq 1 ]; then
+    run_once "$@"
+    exit $?
+fi
+
+log "every ${INTERVAL}s$([ "$ALIGN" -eq 1 ] && echo ' (aligned)'): $*"
+while [ "$stopping" -eq 0 ]; do
+    if [ "$ALIGN" -eq 1 ]; then
+        now="$(date +%s)"
+        nap $(( INTERVAL - now % INTERVAL ))
+        [ "$stopping" -eq 0 ] || break
+        run_once "$@" || true
+    else
+        started="$(date +%s)"
+        run_once "$@" || true
+        [ "$stopping" -eq 0 ] || break
+        left=$(( INTERVAL - ($(date +%s) - started) ))
+        [ "$left" -gt 0 ] && nap "$left"
+    fi
+done
+log "stopped"
+exit 0

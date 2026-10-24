@@ -1,99 +1,424 @@
 name: build-base
 
-# Weekly rebuild is the CVE story: it picks up Alpine and PHP patch releases
-# without anyone remembering to do it. App repos then get a Renovate PR to bump
-# the digest they pin.
+# =============================================================================
+# Weekly rebuild of docker.io/achelesstech/php-base for every supported PHP
+# line, on the newest upstream patch release and the newest Alpine.
+#
+#   :8.2 :8.3 :8.4 :8.5 (:latest = 8.5)   floating — what apps pin BY DIGEST
+#   :8.4.27  :8.4-alpine3.24               floating within a patch / Alpine
+#   :8.4.27-20261026                       one per build (rollback, audit)
+#   …-dev / :latest-dev                    the same + Xdebug, PCOV, git
+#   :8.6-rc  :8.6-rc-dev                   prerelease canary (never :8.6)
+#
+# Flow:  resolve ─► build (line × arch, native runners) ─► publish (per line)
+#   resolve   lint; pin every upstream input to a digest (scripts/resolve-matrix.sh)
+#   build     build + push BY DIGEST (untagged, invisible), pull that exact
+#             digest back, run the behaviour tests, dev tests, framework smoke
+#             tests (amd64) and Trivy. Only a digest that passed everything is
+#             handed to publish.
+#   publish   per line: all platforms passed -> one multi-arch tag set, signed.
+#             A failure on one line never blocks the others.
+#
+# Required secrets: DOCKERHUB_USERNAME, DOCKERHUB_TOKEN (Read & Write token).
+# =============================================================================
+
 on:
+  schedule:
+    # Mondays 03:23 UTC. Off the top of the hour: GitHub delays (and under
+    # load drops) scheduled runs that start at :00.
+    - cron: '23 3 * * 1'
   push:
     branches: [main]
-    paths: ['Dockerfile', 'rootfs/**', '.github/workflows/build-base.yml']
+    paths:
+      - Dockerfile
+      - rootfs/**
+      - rootfs-dev/**
+      - versions.json
+      - scripts/**
+      - test/**
+      - .github/workflows/build-base.yml
   pull_request:
-    paths: ['Dockerfile', 'rootfs/**']
-  schedule:
-    - cron: '0 4 * * 1'
+    paths:
+      - Dockerfile
+      - rootfs/**
+      - rootfs-dev/**
+      - versions.json
+      - scripts/**
+      - test/**
+      - .github/workflows/build-base.yml
   workflow_dispatch:
+    inputs:
+      only:
+        description: 'Only these PHP lines, comma-separated (e.g. 8.4,8.5). Empty = all.'
+        required: false
+        default: ''
+      publish:
+        description: 'Push to Docker Hub'
+        type: boolean
+        default: true
+      include_eol:
+        description: 'Also build lines past their end-of-life date'
+        type: boolean
+        default: false
+      skip_frameworks:
+        description: 'Skip the framework smoke tests (emergency security rebuild)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-base-${{ github.ref }}
+  # Never cancel a publishing run half-way; do cancel superseded PR runs.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # Docker Hub. REGISTRY stays explicit so tags are unambiguous; docker/login-action
-  # is given no `registry:` at all, which is how it targets Docker Hub.
-  REGISTRY: docker.io
-  IMAGE: achelesstech/php-base
+  IMAGE: docker.io/achelesstech/php-base
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # PHP 8.2 is a migration bridge only — security support ends
-          # 2026-12-31. Drop it once Laravel 11 is retired.
-          - php: '8.2'
-            alpine: '3.21'
-          - php: '8.4'
-            alpine: '3.21'
-
+  # ===========================================================================
+  resolve:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      HAS_HUB_CREDENTIALS: ${{ secrets.DOCKERHUB_USERNAME != '' }}
+    outputs:
+      lines: ${{ steps.resolve.outputs.lines }}
+      build: ${{ steps.resolve.outputs.build }}
+      composer: ${{ steps.resolve.outputs.composer }}
+      date: ${{ steps.resolve.outputs.date }}
+      platforms: ${{ steps.resolve.outputs.platforms }}
+      publish: ${{ steps.publish.outputs.publish }}
     steps:
-      - uses: actions/checkout@v5
-
-      - name: Lint Dockerfile
-        uses: hadolint/hadolint-action@v3.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          dockerfile: Dockerfile
+          persist-credentials: false
 
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-
-      # Secrets are absent on fork PRs, which is why every push step is gated on
-      # the event not being a pull_request.
+      # Log in whenever the secrets exist (everything except fork PRs), not
+      # only when publishing: anonymous Docker Hub pulls are capped at 100 per
+      # hour per IP, runners share IPs, and one weekly run makes dozens of
+      # manifest requests. (Verified the hard way while testing this design.)
       - name: Log in to Docker Hub
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+        if: env.HAS_HUB_CREDENTIALS == 'true'
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # Load a single-arch image locally so the smoke test can actually run it.
-      - name: Build (local, for testing)
-        uses: docker/build-push-action@v6
+      - name: Lint Dockerfile
+        uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
+        with:
+          dockerfile: Dockerfile
+          config: .hadolint.yaml
+
+      - name: Lint shell scripts
+        run: |
+          docker run --rm -v "$PWD:/src:ro" -w /src koalaman/shellcheck:v0.11.0 -S warning -x \
+            -s sh rootfs/usr/local/bin/docker-entrypoint.sh rootfs/usr/local/bin/healthcheck.sh \
+                  rootfs/usr/local/bin/php-base-every rootfs/usr/local/bin/php-base-info \
+                  rootfs/usr/local/bin/php-base-validate rootfs/usr/local/bin/nginx-validate.sh
+          docker run --rm -v "$PWD:/src:ro" -w /src koalaman/shellcheck:v0.11.0 -S warning -x \
+            -s bash scripts/*.sh test/*.sh test/frameworks/*.sh
+
+      - name: Cloudflare ranges still current?
+        # Reports, never rewrites: who nginx trusts changes only through a PR.
+        run: scripts/update-cloudflare-ips.sh --check || true
+
+      - name: Resolve upstream digests and versions
+        id: resolve
+        env:
+          ONLY: ${{ inputs.only }}
+          INCLUDE_EOL: ${{ inputs.include_eol }}
+        run: |
+          args=()
+          if [[ -n "${ONLY}" ]]; then args+=(--only "${ONLY}"); fi
+          if [[ "${INCLUDE_EOL}" == "true" ]]; then args+=(--include-eol); fi
+          scripts/resolve-matrix.sh "${args[@]}" >> "$GITHUB_OUTPUT"
+          echo "platforms=$(jq -c .platforms versions.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish this run?
+        id: publish
+        env:
+          PUBLISH: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.publish) }}
+        run: echo "publish=${PUBLISH}" >> "$GITHUB_OUTPUT"
+
+  # ===========================================================================
+  build:
+    name: build ${{ matrix.line }} ${{ matrix.arch }}
+    needs: resolve
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    # A PHP release candidate is a canary: its failure is information, not an outage.
+    continue-on-error: ${{ matrix.prerelease }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.resolve.outputs.build) }}
+    env:
+      PUBLISH: ${{ needs.resolve.outputs.publish }}
+      SCOPE: php${{ matrix.line }}-${{ matrix.arch }}
+      HAS_HUB_CREDENTIALS: ${{ secrets.DOCKERHUB_USERNAME != '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to Docker Hub
+        if: env.HAS_HUB_CREDENTIALS == 'true'
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build arguments
+        id: args
+        env:
+          LINE: ${{ matrix.line }}
+          FROM: ${{ matrix.from }}
+          UPSTREAM: ${{ matrix.upstream }}
+          DIGEST: ${{ matrix.digest }}
+          PHP_FULL: ${{ matrix.php_version }}
+          PRERELEASE: ${{ matrix.prerelease }}
+          COMPOSER: ${{ needs.resolve.outputs.composer }}
+          DATE: ${{ needs.resolve.outputs.date }}
+        run: |
+          {
+            echo "list<<EOF"
+            echo "PHP_VERSION=${LINE}"
+            echo "PHP_IMAGE=${FROM}"
+            echo "COMPOSER_IMAGE=${COMPOSER}"
+            echo "BASE_NAME=docker.io/library/${UPSTREAM}"
+            echo "BASE_DIGEST=${DIGEST}"
+            echo "BASE_VERSION=${PHP_FULL}-${DATE}"
+            echo "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "VCS_REF=${GITHUB_SHA}"
+            echo "SOURCE_URL=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
+            # Weekly: forces a fresh `apk upgrade && apk add` (see Dockerfile).
+            echo "PKG_CACHE_BUST=${DATE}"
+            echo "ALLOW_MISSING_DEV_EXTENSIONS=$([[ "${PRERELEASE}" == "true" ]] && echo 1 || echo 0)"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      # ── Publishing run: push BY DIGEST first (no tag points at it yet), then
+      #    pull that exact digest back and test it. What is tested is what ships.
+      - name: Build and push runtime (by digest)
+        id: runtime
+        if: env.PUBLISH == 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
+          target: runtime
+          platforms: ${{ matrix.platform }}
+          build-args: ${{ steps.args.outputs.list }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=${{ env.SCOPE }}
+          cache-to: type=gha,scope=${{ env.SCOPE }},mode=max
+
+      - name: Build and push dev (by digest)
+        id: dev
+        if: env.PUBLISH == 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: dev
+          platforms: ${{ matrix.platform }}
+          build-args: ${{ steps.args.outputs.list }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=${{ env.SCOPE }}
+          cache-to: type=gha,scope=${{ env.SCOPE }}-dev,mode=max
+
+      - name: Pull the pushed digests for testing
+        if: env.PUBLISH == 'true'
+        env:
+          RUNTIME_DIGEST: ${{ steps.runtime.outputs.digest }}
+          DEV_DIGEST: ${{ steps.dev.outputs.digest }}
+        run: |
+          docker pull "${IMAGE}@${RUNTIME_DIGEST}"
+          docker pull "${IMAGE}@${DEV_DIGEST}"
+          docker tag "${IMAGE}@${RUNTIME_DIGEST}" php-base:test
+          docker tag "${IMAGE}@${DEV_DIGEST}" php-base:test-dev
+
+      # ── Pull request: build locally, never push.
+      - name: Build runtime (local)
+        if: env.PUBLISH != 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: runtime
+          platforms: ${{ matrix.platform }}
+          build-args: ${{ steps.args.outputs.list }}
           load: true
           tags: php-base:test
-          build-args: |
-            PHP_VERSION=${{ matrix.php }}
-            ALPINE_VERSION=${{ matrix.alpine }}
-            BASE_VERSION=${{ matrix.php }}-${{ github.sha }}
-          cache-from: type=gha,scope=php-${{ matrix.php }}
+          cache-from: type=gha,scope=${{ env.SCOPE }}
 
-      - name: Smoke test
-        run: make test PHP=${{ matrix.php }} REGISTRY=. IMAGE=php-base VERSION=test
+      - name: Build dev (local)
+        if: env.PUBLISH != 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: dev
+          platforms: ${{ matrix.platform }}
+          build-args: ${{ steps.args.outputs.list }}
+          load: true
+          tags: php-base:test-dev
+          cache-from: type=gha,scope=${{ env.SCOPE }}
+
+      # ── Tests ──────────────────────────────────────────────────────────────
+      - name: Behaviour tests (runtime)
+        run: test/run.sh php-base:test "${{ matrix.line }}"
+
+      - name: Behaviour tests (dev)
+        run: test/run-dev.sh php-base:test-dev
+
+      - name: Framework smoke tests
+        # amd64 only: the frameworks are pure PHP, and arm64 already ran the
+        # behaviour tests natively above.
+        if: matrix.arch == 'amd64' && !inputs.skip_frameworks
         env:
-          DOCKER_BUILDKIT: '1'
+          FRAMEWORKS: ${{ toJSON(matrix.frameworks) }}
+        run: test/frameworks/run.sh php-base:test "${FRAMEWORKS}"
 
-      - name: Scan for vulnerabilities
-        uses: aquasecurity/trivy-action@master
+      - name: Vulnerability scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: php-base:test
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: '1'
 
-      - name: Build and push (multi-arch)
-        if: github.event_name != 'pull_request'
-        uses: docker/build-push-action@v6
+      # ── Hand the tested digests to publish ─────────────────────────────────
+      - name: Record digests
+        if: env.PUBLISH == 'true'
+        env:
+          RUNTIME_DIGEST: ${{ steps.runtime.outputs.digest }}
+          DEV_DIGEST: ${{ steps.dev.outputs.digest }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          mkdir -p digests
+          echo "${RUNTIME_DIGEST}" > "digests/runtime-${ARCH}"
+          echo "${DEV_DIGEST}" > "digests/dev-${ARCH}"
+
+      - name: Upload digests
+        if: env.PUBLISH == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          context: .
-          push: true
-          platforms: linux/amd64,linux/arm64
-          build-args: |
-            PHP_VERSION=${{ matrix.php }}
-            ALPINE_VERSION=${{ matrix.alpine }}
-            BASE_VERSION=${{ matrix.php }}-${{ github.sha }}
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ matrix.php }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ matrix.php }}-${{ github.run_number }}
-          cache-from: type=gha,scope=php-${{ matrix.php }}
-          cache-to: type=gha,scope=php-${{ matrix.php }},mode=max
+          name: digests-${{ matrix.line }}-${{ matrix.arch }}
+          path: digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # ===========================================================================
+  publish:
+    name: publish ${{ matrix.line }}
+    needs: [resolve, build]
+    # always(): one failed line must not stop the others from publishing.
+    if: always() && needs.resolve.result == 'success' && needs.resolve.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write   # keyless cosign signature via GitHub OIDC
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.resolve.outputs.lines) }}
+    steps:
+      - name: Download tested digests
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        continue-on-error: true
+        with:
+          pattern: digests-${{ matrix.line }}-*
+          path: digests
+          merge-multiple: true
+
+      - name: Every platform passed?
+        env:
+          PLATFORMS: ${{ needs.resolve.outputs.platforms }}
+          LINE: ${{ matrix.line }}
+        run: |
+          for arch in $(jq -r '.[] | split("/")[1]' <<<"${PLATFORMS}"); do
+            for variant in runtime dev; do
+              if [[ ! -s "digests/${variant}-${arch}" ]]; then
+                echo "::error::PHP ${LINE}: no tested ${variant} digest for ${arch} — a build or test failed. Not published; the previous tags stay as they were."
+                exit 1
+              fi
+            done
+          done
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Create multi-arch tags
+        id: tag
+        env:
+          TAGS: ${{ toJSON(matrix.tags) }}
+          DEV_TAGS: ${{ toJSON(matrix.dev_tags) }}
+        run: |
+          publish() {   # publish <variant> <json tag list>
+            local variant="$1" tags="$2" args=() refs=()
+            while IFS= read -r t; do args+=(-t "$t"); done < <(jq -r '.[]' <<<"$tags")
+            for f in digests/"${variant}"-*; do refs+=("${IMAGE}@$(cat "$f")"); done
+            docker buildx imagetools create "${args[@]}" "${refs[@]}"
+            docker buildx imagetools inspect "$(jq -r '.[0]' <<<"$tags")" --format '{{json .Manifest}}' | jq -r .digest
+          }
+          echo "runtime=$(publish runtime "${TAGS}")" >> "$GITHUB_OUTPUT"
+          echo "dev=$(publish dev "${DEV_TAGS}")" >> "$GITHUB_OUTPUT"
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Sign (keyless)
+        env:
+          RUNTIME: ${{ steps.tag.outputs.runtime }}
+          DEV: ${{ steps.tag.outputs.dev }}
+        run: cosign sign --yes "${IMAGE}@${RUNTIME}" "${IMAGE}@${DEV}"
+
+      - name: Summary
+        env:
+          LINE: ${{ matrix.line }}
+          PHP_FULL: ${{ matrix.php_version }}
+          ALPINE: ${{ matrix.alpine_full }}
+          RUNTIME: ${{ steps.tag.outputs.runtime }}
+          TAGS: ${{ toJSON(matrix.tags) }}
+        run: |
+          {
+            echo "### PHP ${LINE} — ${PHP_FULL} on Alpine ${ALPINE}"
+            echo
+            echo "Pin with \`${IMAGE}:${LINE}@${RUNTIME}\`"
+            echo
+            jq -r '.[] | "- `" + . + "`"' <<<"${TAGS}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ===========================================================================
+  # A scheduled run that fails only emails whoever last edited the cron line.
+  # Open (or bump) an issue instead, so a broken weekly build cannot go unseen.
+  report:
+    needs: [resolve, build, publish]
+    if: always() && github.event_name == 'schedule' && (needs.resolve.result == 'failure' || needs.build.result == 'failure' || needs.publish.result == 'failure')
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="Weekly php-base build failed"
+          url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          n="$(gh issue list -R "$GITHUB_REPOSITORY" --state open --search "in:title \"${title}\"" --json number -q '.[0].number')"
+          if [[ -n "$n" ]]; then
+            gh issue comment "$n" -R "$GITHUB_REPOSITORY" --body "Failed again: ${url}"
+          else
+            gh issue create -R "$GITHUB_REPOSITORY" --title "$title" --body "Run: ${url}"
+          fi

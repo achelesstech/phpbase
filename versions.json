@@ -1,0 +1,67 @@
+{
+  "$comment": [
+    "Single source of truth for what CI builds. Read by scripts/resolve-matrix.sh.",
+    "Each PHP line is resolved AT BUILD TIME to an exact upstream digest of",
+    "php:<line>-fpm-alpine — the floating tag that always follows the newest",
+    "Alpine release the official image supports. Nothing here pins Alpine:",
+    "a hand-pinned alpine3.21 is exactly how 8.4 froze on PHP 8.4.15.",
+    "",
+    "eol         after this date the line is skipped (with a warning) unless",
+    "            the workflow is dispatched with include_eol=true.",
+    "latest      this line also publishes :latest.",
+    "prerelease  built from php:<line>-rc-fpm-alpine, allowed to fail, and",
+    "            published only as :<line>-rc / :<line>-rc-dev.",
+    "frameworks  what the weekly framework smoke tests install on each line.",
+    "            This table is also the supported-combination matrix for app",
+    "            repos: a framework/PHP pair that is not listed is not tested."
+  ],
+  "image": "docker.io/achelesstech/php-base",
+  "platforms": ["linux/amd64", "linux/arm64"],
+  "php": [
+    {
+      "line": "8.2",
+      "eol": "2026-12-31",
+      "frameworks": {
+        "laravel": "laravel/laravel:^12.0",
+        "wordpress": "latest",
+        "moodle": "MOODLE_501_STABLE"
+      }
+    },
+    {
+      "line": "8.3",
+      "eol": "2027-12-31",
+      "frameworks": {
+        "laravel": "laravel/laravel:^13.0",
+        "drupal": "drupal/recommended-project:^11",
+        "wordpress": "latest",
+        "moodle": "MOODLE_503_STABLE"
+      }
+    },
+    {
+      "line": "8.4",
+      "eol": "2028-12-31",
+      "frameworks": {
+        "laravel": "laravel/laravel:^13.0",
+        "drupal": "drupal/recommended-project:^11",
+        "wordpress": "latest",
+        "moodle": "MOODLE_503_STABLE"
+      }
+    },
+    {
+      "line": "8.5",
+      "eol": "2029-12-31",
+      "latest": true,
+      "frameworks": {
+        "laravel": "laravel/laravel:^13.0",
+        "drupal": "drupal/recommended-project:^11",
+        "wordpress": "latest"
+      }
+    },
+    {
+      "line": "8.6",
+      "eol": "2030-12-31",
+      "prerelease": true,
+      "frameworks": {}
+    }
+  ]
+}

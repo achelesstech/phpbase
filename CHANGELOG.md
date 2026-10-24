@@ -1,5 +1,83 @@
 # Changelog
 
+## v2 (proposal): weekly multi-line builds for Laravel, Drupal, Moodle and WordPress
+
+See PROPOSAL.md for the reasoning and VERIFICATION.md for the test results.
+
+### Security
+
+- **PHP2Shell (CVE-2026-109618/109619).** The pinned `alpine3.21` upstream tag
+  stopped receiving PHP releases in Nov 2025, so `:8.4` was still on PHP 8.4.15.
+  The build now resolves the floating `php:<line>-fpm-alpine` to an exact
+  digest on every run (`scripts/resolve-matrix.sh`). It warns when upstream is
+  stale or lags php.net.
+- **OS packages are upgraded weekly** (`apk upgrade` on a cache-busted layer).
+  The previous image had 46 fixable HIGH/CRITICAL findings (openssl, curl,
+  musl, libxml2, …); the new one has 0.
+- `session.upload_progress.enabled = Off`, per the PHP advisory of 2026-10-23.
+- Production engine defaults that had been missing (the official image ships
+  no php.ini): `zend.assertions=-1`, `zend.exception_ignore_args=On`,
+  `request_order=GP`, `output_buffering=4096`.
+- Config, presets, hooks and `/usr/local/bin` are root-owned. Runtime state
+  lives only in `/tmp/php-base` and is wiped at every start. `read_only: true`
+  works.
+
+### Lines and variants
+
+- PHP 8.2, 8.3, 8.4 and 8.5, plus an 8.6 release-candidate canary, all built
+  from `versions.json`.
+- A `:X.Y-dev` variant with Xdebug (off until `XDEBUG_MODE`), PCOV and git.
+- Tags: `X.Y`, `X.Y.Z`, `X.Y-alpineA.B`, `X.Y.Z-YYYYMMDD` and `latest`, each
+  with a `-dev` variant.
+
+### Fixes
+
+- `/home/www-data` was left owned by the deleted uid 82. This is the real cause
+  of the npm EACCES that both Laravel apps worked around.
+- `FPM_SLOWLOG_TIMEOUT` made php-fpm refuse to start, because no `slowlog`
+  path was set.
+- Env-rendered ini values containing `?`, `&` or `=` broke the ini parser,
+  which truncated a Redis `session.save_path` and dropped every later override.
+- Entrypoint logging moved to stderr. Before, CLI output piped from
+  `docker run …` started with `[entrypoint]` lines.
+- The nginx request-body limit now follows PHP's effective `post_max_size`.
+- Behind Cloudflare, the visitor IP is used instead of the edge IP (committed
+  Cloudflare ranges).
+- File modes are set explicitly instead of inheriting the build host's umask.
+
+### Build
+
+- PECL extensions are built from release tarballs with `docker-php-ext-install`.
+  The PHP 8.6 image ships no `pecl`.
+- igbinary 3.2.17RC1, the only release that compiles on PHP 8.5.
+- Added: gmp, sockets, igbinary, memcached and uploadprogress; phpredis now
+  supports igbinary, zstd and lz4; ImageMagick HEIC/WebP/JPEG coders.
+- Composer 2.8 → 2.x, latest (`composer/composer:2-bin`).
+- Runtime libraries are computed with `scanelf`, and the build fails on any
+  extension load warning.
+
+### Features
+
+- nginx presets for Laravel, Drupal, WordPress and Moodle (public/ and legacy
+  layouts), plus shared snippets and a `server.d/` extension point.
+- `php-base-every`: an aligned, non-overlapping periodic runner with a
+  heartbeat. `SCHEDULER_COMMAND` / `WORKER_COMMAND` run jobs inside the web
+  container.
+- A role-aware healthcheck: fpm, heartbeat, http, tcp or none.
+- `php-base-info [--json]` reports what a container runs, and
+  `php-base-validate` checks the nginx and FPM config at build time.
+
+### CI
+
+- Native arm64 runners (no QEMU). Images are pushed by digest, tested from
+  that digest, then tagged. Publishing is per PHP line.
+- Framework smoke tests do real installs of Laravel, Drupal, WordPress and
+  Moodle on every line.
+- cosign keyless signatures, an SBOM and provenance (`mode=max`). Actions are
+  pinned by SHA. A failing scheduled run opens a GitHub issue.
+- Docker Hub login on every job that has secrets, to avoid pull rate limits.
+- Optional daily `watch-upstream.yml`.
+
 ## Registry moved to Docker Hub; CI lint and action versions fixed
 
 ### Registry

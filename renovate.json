@@ -1,0 +1,31 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "$comment": "Renovate for the BASE repo: PECL pins in the Dockerfile and GitHub Action digests. PHP and Alpine are NOT here on purpose — the weekly workflow resolves them to the newest upstream digest on every run.",
+  "extends": ["config:recommended", "helpers:pinGitHubActionDigests"],
+  "schedule": ["before 6am on monday"],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "PECL extension versions pinned as ARGs, each preceded by a `# renovate:` comment",
+      "managerFilePatterns": ["/^Dockerfile$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: extractVersion=(?<extractVersion>\\S+))?\\s+ARG \\w+_VERSION=(?<currentValue>\\S+)"
+      ],
+      "versioningTemplate": "loose"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "One PR for all PECL bumps: the PR's CI run proves them on every PHP line and both architectures together",
+      "matchManagers": ["custom.regex"],
+      "groupName": "PECL extensions"
+    },
+    {
+      "description": "Actions are pinned by digest; minor/patch/digest bumps merge themselves once CI is green",
+      "matchManagers": ["github-actions"],
+      "groupName": "GitHub Actions",
+      "matchUpdateTypes": ["minor", "patch", "digest"],
+      "automerge": true
+    }
+  ]
+}

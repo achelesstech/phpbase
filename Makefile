@@ -1,74 +1,73 @@
 # =============================================================================
 # Makefile — achelesstech/php-base
 # =============================================================================
-# There is ONE image. It has no platform variants and no feature toggles.
-# The only axis is the PHP version.
+# One image per PHP line, two variants (runtime, dev). CI is the publisher;
+# these targets reproduce what it does, locally.
 #
-#   make build            build 8.4 (default)
-#   make build PHP=8.2    build 8.2
-#   make build-all        build every supported version
-#   make test             boot the image and assert it actually works
-#   make shell            interactive shell in the built image
+#   make build                    8.4 runtime + dev  ->  local/php-base:8.4[-dev]
+#   make build PHP=8.5
+#   make build-all                every line in versions.json
+#   make test                     behaviour tests (runtime + dev)
+#   make test-frameworks          Laravel/Drupal/WordPress/Moodle smoke tests
+#   make resolve                  what CI would build right now (digests, tags)
+#   make lint | scan | shell
+#
+# Local tags are local/php-base:* ON PURPOSE: building as
+# docker.io/achelesstech/php-base:8.4 would silently replace the image every
+# app on this machine builds FROM.
 # =============================================================================
 
-REGISTRY    ?= docker.io/achelesstech
-IMAGE       ?= php-base
-PHP         ?= 8.4
-ALPINE      ?= 3.21
-PHP_ALL     ?= 8.2 8.4
-
-VERSION     ?= $(shell date '+%Y%m%d-%H%M')
-TAG         := $(REGISTRY)/$(IMAGE):$(PHP)
-TAG_PINNED  := $(REGISTRY)/$(IMAGE):$(PHP)-$(VERSION)
+PHP        ?= 8.4
+IMAGE      ?= local/php-base
+PHP_ALL    ?= $(shell jq -r '.php[] | select((.prerelease // false) | not) | .line' versions.json)
+TAG        := $(IMAGE):$(PHP)
+DEV_TAG    := $(IMAGE):$(PHP)-dev
+UPSTREAM   := $(if $(filter 8.6,$(PHP)),php:$(PHP)-rc-fpm-alpine,php:$(PHP)-fpm-alpine)
 
 BUILD_ARGS = \
 	--build-arg PHP_VERSION=$(PHP) \
-	--build-arg ALPINE_VERSION=$(ALPINE) \
-	--build-arg BASE_VERSION=$(PHP)-$(VERSION)
+	--build-arg PHP_IMAGE=$(UPSTREAM) \
+	--build-arg BASE_NAME=docker.io/library/$(UPSTREAM) \
+	--build-arg BASE_VERSION=$(PHP)-local \
+	--build-arg BUILD_DATE=$(shell date -u +%Y-%m-%dT%H:%M:%SZ) \
+	--build-arg VCS_REF=$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown) \
+	--build-arg PKG_CACHE_BUST=$(shell date -u +%Y%m%d)
 
-.PHONY: build build-all test shell lint scan push clean
+.PHONY: build build-all test test-frameworks resolve lint scan shell clean
 
 build:
-	docker buildx build \
-		$(BUILD_ARGS) \
-		-t $(TAG) -t $(TAG_PINNED) \
-		--load .
+	docker buildx build $(BUILD_ARGS) --target runtime -t $(TAG) --load .
+	docker buildx build $(BUILD_ARGS) --target dev -t $(DEV_TAG) --load .
 
 build-all:
 	@for v in $(PHP_ALL); do $(MAKE) --no-print-directory build PHP=$$v || exit 1; done
 
-# Manual escape hatch — CI is the normal publisher. Requires `docker login`
-# against Docker Hub with push rights on $(REGISTRY)/$(IMAGE).
-# No registry cache: CI caches into the GitHub Actions cache instead, so a
-# `*-buildcache` tag no longer exists to pull from.
-push:
-	docker buildx build \
-		$(BUILD_ARGS) \
-		--platform linux/amd64,linux/arm64 \
-		-t $(TAG) -t $(TAG_PINNED) \
-		--push .
+test: build
+	./test/run.sh $(TAG) $(PHP)
+	./test/run-dev.sh $(DEV_TAG)
 
-# Same config CI uses, so a green `make lint` means a green CI lint.
+test-frameworks: build
+	./test/frameworks/run.sh $(TAG) '$(shell jq -c --arg l $(PHP) '.php[] | select(.line == $$l) | .frameworks' versions.json)'
+
+resolve:
+	./scripts/resolve-matrix.sh | sed -n 's/^lines=//p' | jq '.[] | {line, php_version, alpine_full, tags}'
+
+# Same configs CI uses.
 lint:
 	docker run --rm -i -v "$(CURDIR)/.hadolint.yaml:/.hadolint.yaml:ro" \
 		hadolint/hadolint hadolint --config /.hadolint.yaml - < Dockerfile
+	docker run --rm -v "$(CURDIR):/src:ro" -w /src koalaman/shellcheck:v0.11.0 -S warning -x -s sh \
+		rootfs/usr/local/bin/docker-entrypoint.sh rootfs/usr/local/bin/healthcheck.sh \
+		rootfs/usr/local/bin/php-base-every rootfs/usr/local/bin/php-base-info \
+		rootfs/usr/local/bin/php-base-validate rootfs/usr/local/bin/nginx-validate.sh
+	docker run --rm -v "$(CURDIR):/src:ro" -w /src koalaman/shellcheck:v0.11.0 -S warning -x -s bash \
+		scripts/*.sh test/*.sh test/frameworks/*.sh
 
 scan:
 	trivy image --severity HIGH,CRITICAL --ignore-unfixed $(TAG)
 
-# =============================================================================
-# Smoke test
-# =============================================================================
-# Builds a minimal fixture application on the base, boots it, and asserts real
-# behaviour. See test/run.sh — every check maps to something that was actually
-# broken in the previous revision.
-# =============================================================================
-test: build
-	@./test/run.sh $(TAG)
-
-shell: build
+shell:
 	docker run --rm -it --entrypoint sh $(TAG)
 
 clean:
-	-docker rm -f php-base-test 2>/dev/null
-	-docker images --filter=reference="$(REGISTRY)/$(IMAGE)" -q | xargs -r docker rmi -f
+	-docker images --filter=reference='$(IMAGE)' -q | xargs -r docker rmi -f
