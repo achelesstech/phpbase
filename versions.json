@@ -14,7 +14,8 @@
     "            (10^6 bytes). A build over it fails.",
     "prerelease  built from php:<line>-rc-fpm-alpine, allowed to fail, and",
     "            published only as :<line>-rc / :<line>-rc-dev.",
-    "frameworks  what the weekly framework smoke tests install on each line.",
+    "frameworks  what the weekly framework smoke tests install on each line:",
+    "            a list of versions per framework, one smoke test each.",
     "            This table is also the supported-combination matrix for app",
     "            repos: a framework/PHP pair that is not listed is not tested."
   ],
@@ -26,9 +27,9 @@
       "max_size_mb": 175,
       "eol": "2026-12-31",
       "frameworks": {
-        "laravel": "laravel/laravel:^12.0",
-        "wordpress": "latest",
-        "moodle": "MOODLE_501_STABLE"
+        "laravel": ["laravel/laravel:^12.0"],
+        "wordpress": ["latest"],
+        "moodle": ["MOODLE_501_STABLE"]
       }
     },
     {
@@ -36,10 +37,10 @@
       "max_size_mb": 178,
       "eol": "2027-12-31",
       "frameworks": {
-        "laravel": "laravel/laravel:^13.0",
-        "drupal": "drupal/recommended-project:^11",
-        "wordpress": "latest",
-        "moodle": "MOODLE_503_STABLE"
+        "laravel": ["laravel/laravel:^12.0", "laravel/laravel:^13.0"],
+        "drupal": ["drupal/recommended-project:^11"],
+        "wordpress": ["latest"],
+        "moodle": ["MOODLE_502_STABLE", "MOODLE_503_STABLE"]
       }
     },
     {
@@ -47,10 +48,10 @@
       "max_size_mb": 180,
       "eol": "2028-12-31",
       "frameworks": {
-        "laravel": "laravel/laravel:^13.0",
-        "drupal": "drupal/recommended-project:^11",
-        "wordpress": "latest",
-        "moodle": "MOODLE_503_STABLE"
+        "laravel": ["laravel/laravel:^12.0", "laravel/laravel:^13.0"],
+        "drupal": ["drupal/recommended-project:^11"],
+        "wordpress": ["latest"],
+        "moodle": ["MOODLE_501_STABLE", "MOODLE_502_STABLE", "MOODLE_503_STABLE"]
       }
     },
     {
@@ -59,9 +60,9 @@
       "eol": "2029-12-31",
       "latest": true,
       "frameworks": {
-        "laravel": "laravel/laravel:^13.0",
-        "drupal": "drupal/recommended-project:^11",
-        "wordpress": "latest"
+        "laravel": ["laravel/laravel:^12.0", "laravel/laravel:^13.0"],
+        "drupal": ["drupal/recommended-project:^11"],
+        "wordpress": ["latest"]
       }
     },
     {

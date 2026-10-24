@@ -40,8 +40,11 @@ test: build
 	./test/run.sh $(TAG) $(PHP)
 	./test/run-dev.sh $(DEV_TAG)
 
+# Every version each framework lists for $(PHP) in versions.json, one run each.
 test-frameworks: build
-	./test/frameworks/run.sh $(TAG) '$(shell jq -c --arg l $(PHP) '.php[] | select(.line == $$l) | .frameworks' versions.json)'
+	@fw="$$(jq -ce --arg l '$(PHP)' '.php[] | select(.line == $$l) | .frameworks' versions.json)" \
+		|| { echo "PHP $(PHP) is not a line in versions.json" >&2; exit 1; }; \
+	set -x; ./test/frameworks/run.sh '$(TAG)' "$$fw"
 
 resolve:
 	./scripts/resolve-matrix.sh | sed -n 's/^lines=//p' | jq '.[] | {line, php_version, alpine_full, alpine_image, build_tag, tags}'
