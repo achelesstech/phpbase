@@ -6,7 +6,7 @@
 # feature toggles. Every application (Laravel, Drupal, Moodle, …) gets the
 # same fixed payload and adds its own vhost, code and OS packages on top.
 #
-#   FROM ghcr.io/achelesstech/php-base:8.4@sha256:...
+#   FROM docker.io/achelesstech/php-base:8.4@sha256:...
 #
 # Boundary rule
 #   Compiled PHP extensions  -> here, as the union of what every app needs.
@@ -32,6 +32,9 @@ FROM php:${PHP_VERSION}-fpm-alpine${ALPINE_VERSION} AS ext-builder
 # Already enabled by the upstream php:*-fpm-alpine image and therefore NOT
 # rebuilt here: mbstring, curl, xml, dom, simplexml, sodium, openssl, phar,
 # fileinfo, session, tokenizer, sqlite3, pdo_sqlite, iconv, posix.
+#
+# Unpinned apk versions and the unquoted $PHPIZE_DEPS are both intentional —
+# see .hadolint.yaml for why those two rules are switched off.
 RUN set -eux; \
     apk add --no-cache --virtual .build-deps \
         $PHPIZE_DEPS \
@@ -204,8 +207,11 @@ EXPOSE 8080
 # /fpm-ping proves PHP-FPM is alive. A static nginx /healthz stays green while
 # FPM is dead, which is how a container reports healthy and 502s every request.
 # Application vhosts MUST define the /fpm-ping location (see apps/*/docker/vhost.conf).
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD healthcheck.sh
+# Kept on one line: hadolint anchors an inline ignore to the instruction's first
+# line, so a wrapped HEALTHCHECK cannot be exempted from DL3025 (which wants JSON
+# notation; shell form is the conventional spelling for HEALTHCHECK CMD).
+# hadolint ignore=DL3025
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD healthcheck.sh
 
 ENTRYPOINT ["tini", "--", "docker-entrypoint.sh"]
 CMD ["supervisord", "-c", "/etc/supervisor/supervisord.conf"]

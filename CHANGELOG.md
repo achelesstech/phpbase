@@ -1,5 +1,46 @@
 # Changelog
 
+## Registry moved to Docker Hub; CI lint and action versions fixed
+
+### Registry
+
+- **GHCR → Docker Hub.** Everything now publishes to and pulls from
+  `docker.io/achelesstech/*`: the base workflow, all six app workflows,
+  `Makefile`, every `compose.prod.yml`, every `ARG BASE_IMAGE`, the Renovate
+  `matchPackageNames`, and the docs.
+- **Auth is now `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN`** instead of the
+  automatic `GITHUB_TOKEN`. These are real secrets that must be set on each
+  repository before the first push; the `packages: write` permission is gone
+  because nothing writes to GitHub Packages any more.
+- **App workflows hardcode their image name** (`achelesstech/<app>-app`) rather
+  than deriving it from `${{ github.repository }}`. Docker Hub repository names
+  are independent of GitHub repository names, and the derived form would have
+  silently pushed somewhere other than what `compose.prod.yml` pulls if either
+  were renamed.
+- **Layer cache moved from registry to `type=gha`.** Registry cache stored a
+  `*-buildcache` tag next to the real tags, which on Docker Hub means a visible
+  junk tag in the repository listing and cache traffic counted against pull
+  rate limits. `make push` lost its `--cache-from`/`--cache-to` for the same
+  reason: the tag it referenced no longer exists.
+
+### CI
+
+- **`actions/checkout@v4` → `@v5`** in all seven workflows. v4 targets Node 20,
+  which GitHub has deprecated and is already force-running on Node 24.
+- **hadolint DL3018 and SC2086 resolved via `.hadolint.yaml`**, added at the
+  repo root and to every app template. DL3018 ("pin apk versions") is refused
+  deliberately: the weekly rebuild exists to pick up Alpine patch releases, and
+  Alpine garbage-collects superseded versions from its repos within weeks, so
+  pinning would both freeze CVEs and eventually break the build. Reproducibility
+  comes from pinning the base image *by digest*, which the app repos do.
+  SC2086 fires on `apk add $PHPIZE_DEPS`, which must word-split. DL3066 is
+  ignored too (`USER www-data` is uid 1000, asserted at build time).
+- **`make lint` now passes the same config CI uses,** so a green local lint
+  means a green CI lint. It previously ran bare `hadolint` and disagreed.
+- **`HEALTHCHECK` is a single line.** hadolint anchors an inline
+  `# hadolint ignore=` to an instruction's first line, so a wrapped HEALTHCHECK
+  could not be exempted from DL3025.
+
 ## Restructure — one boring base + per-app templates
 
 Replaces the previous single 509-line Dockerfile with 42 build args that

@@ -36,7 +36,7 @@ anything, a uid/gid that was silently wrong).
 ```dockerfile
 # Pin by digest. A moving tag means your app image changes silently
 # and last week's build is not reproducible.
-FROM ghcr.io/achelesstech/php-base:8.4@sha256:...
+FROM docker.io/achelesstech/php-base:8.4@sha256:...
 
 COPY docker/vhost.conf    /etc/nginx/conf.d/vhost.conf
 COPY docker/entrypoint.d/ /docker-entrypoint.d/
@@ -74,8 +74,21 @@ on it.
 | `8.4` | 8.4 | current |
 | `8.2` | 8.2 | migration bridge — **security support ends 2026-12-31** |
 
-Rebuilt weekly by CI so Alpine and PHP patch releases land without anyone
-remembering. Renovate then opens digest-bump PRs in the app repos.
+Published to **Docker Hub** as `docker.io/achelesstech/php-base`. Rebuilt weekly
+by CI so Alpine and PHP patch releases land without anyone remembering. Renovate
+then opens digest-bump PRs in the app repos.
+
+CI needs two repository secrets to push:
+
+| Secret | Value |
+|---|---|
+| `DOCKERHUB_USERNAME` | Docker Hub account with write access to `achelesstech` |
+| `DOCKERHUB_TOKEN` | Access token from Docker Hub → Account Settings → Personal access tokens, scope **Read & Write** |
+
+Use an access token, never the account password — a token is scoped and can be
+revoked on its own. The same two secrets are expected by every app repo built
+from [`apps/`](apps/). Pull is anonymous; nothing needs a login to consume the
+image, though authenticated pulls get a higher rate limit.
 
 ## What's inside
 

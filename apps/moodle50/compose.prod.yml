@@ -35,7 +35,7 @@ services:
       context: .
       args:
         MOODLE_BRANCH: "500"
-    image: ghcr.io/achelesstech/moodle50-app:latest
+    image: docker.io/achelesstech/moodle50-app:latest
     restart: unless-stopped
     <<: *moodle-env
     volumes:
@@ -59,7 +59,7 @@ services:
   # Moodle needs cron every minute or scheduled tasks silently stop running.
   # Use EITHER this sidecar OR MOODLE_RUN_CRON=true on the app — never both.
   cron:
-    image: ghcr.io/achelesstech/moodle50-app:latest
+    image: docker.io/achelesstech/moodle50-app:latest
     restart: unless-stopped
     command: ["/usr/local/bin/moodle-cron.sh"]
     <<: *moodle-env
@@ -79,7 +79,7 @@ services:
   # One-shot first install:
   #   docker compose -f compose.prod.yml --profile ops run --rm install
   install:
-    image: ghcr.io/achelesstech/moodle50-app:latest
+    image: docker.io/achelesstech/moodle50-app:latest
     <<: *moodle-env
     environment:
       MOODLE_ADMIN_USER:     ${MOODLE_ADMIN_USER:-admin}
@@ -111,7 +111,7 @@ services:
   # Run after pulling a new image tag:
   #   docker compose -f compose.prod.yml --profile ops run --rm upgrade
   upgrade:
-    image: ghcr.io/achelesstech/moodle50-app:latest
+    image: docker.io/achelesstech/moodle50-app:latest
     <<: *moodle-env
     command:
       - /bin/sh

@@ -25,7 +25,7 @@ services:
     build:
       context: .
       target: wordpress
-    image: ghcr.io/achelesstech/wordpress-app:latest
+    image: docker.io/achelesstech/wordpress-app:latest
     restart: unless-stopped
     <<: *wp-env
     volumes:
@@ -47,7 +47,7 @@ services:
   # unreliable on a low-traffic site and slow on a busy one, so disable it with
   # DISABLE_WP_CRON and run it properly here.
   cron:
-    image: ghcr.io/achelesstech/wordpress-app:latest
+    image: docker.io/achelesstech/wordpress-app:latest
     restart: unless-stopped
     command:
       - /bin/sh
@@ -68,7 +68,7 @@ services:
       retries: 3
 
   install:
-    image: ghcr.io/achelesstech/wordpress-app:latest
+    image: docker.io/achelesstech/wordpress-app:latest
     <<: *wp-env
     environment:
       WORDPRESS_RUN_INSTALL:   "true"
@@ -89,7 +89,7 @@ services:
 
   # docker compose -f compose.prod.yml --profile ops run --rm wp <command>
   wp:
-    image: ghcr.io/achelesstech/wordpress-app:latest
+    image: docker.io/achelesstech/wordpress-app:latest
     entrypoint: ["wp"]
     <<: *wp-env
     volumes:

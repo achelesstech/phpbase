@@ -14,15 +14,16 @@ on:
   workflow_dispatch:
 
 env:
-  REGISTRY: ghcr.io
-  IMAGE: ${{ github.repository_owner }}/php-base
+  # Docker Hub. REGISTRY stays explicit so tags are unambiguous; docker/login-action
+  # is given no `registry:` at all, which is how it targets Docker Hub.
+  REGISTRY: docker.io
+  IMAGE: achelesstech/php-base
 
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -35,7 +36,7 @@ jobs:
             alpine: '3.21'
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Lint Dockerfile
         uses: hadolint/hadolint-action@v3.1.0
@@ -45,13 +46,14 @@ jobs:
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GHCR
+      # Secrets are absent on fork PRs, which is why every push step is gated on
+      # the event not being a pull_request.
+      - name: Log in to Docker Hub
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       # Load a single-arch image locally so the smoke test can actually run it.
       - name: Build (local, for testing)
@@ -64,7 +66,7 @@ jobs:
             PHP_VERSION=${{ matrix.php }}
             ALPINE_VERSION=${{ matrix.alpine }}
             BASE_VERSION=${{ matrix.php }}-${{ github.sha }}
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ matrix.php }}-buildcache
+          cache-from: type=gha,scope=php-${{ matrix.php }}
 
       - name: Smoke test
         run: make test PHP=${{ matrix.php }} REGISTRY=. IMAGE=php-base VERSION=test
@@ -93,5 +95,5 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ matrix.php }}
             ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ matrix.php }}-${{ github.run_number }}
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ matrix.php }}-buildcache
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ matrix.php }}-buildcache,mode=max
+          cache-from: type=gha,scope=php-${{ matrix.php }}
+          cache-to: type=gha,scope=php-${{ matrix.php }},mode=max

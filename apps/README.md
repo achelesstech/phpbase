@@ -30,22 +30,36 @@ docker compose up -d --build
 Then pin the base by digest:
 
 ```bash
-docker buildx imagetools inspect ghcr.io/achelesstech/php-base:8.4 \
+docker buildx imagetools inspect docker.io/achelesstech/php-base:8.4 \
   --format '{{.Manifest.Digest}}'
 ```
 
 ```dockerfile
-ARG BASE_IMAGE=ghcr.io/achelesstech/php-base:8.4@sha256:<that digest>
+ARG BASE_IMAGE=docker.io/achelesstech/php-base:8.4@sha256:<that digest>
 ```
 
 `:8.4` alone means the app image changes silently whenever the base is rebuilt.
 `renovate.json` keeps the digest current.
+
+## Registry
+
+Everything publishes to Docker Hub under `achelesstech`. Before the first push,
+set two secrets on the app repository — `DOCKERHUB_USERNAME` and
+`DOCKERHUB_TOKEN` (a Read & Write access token, not the account password) — and
+create the target repository on Docker Hub if it does not exist yet; the free
+plan allows one private repository, so make sure a new one is private
+deliberately rather than by accident.
+
+`build-app.yml` hardcodes its image name (`achelesstech/<template>-app`) so that
+renaming the GitHub repo cannot silently split what CI pushes from what
+`compose.prod.yml` pulls. Change both together.
 
 ## What every template contains
 
 ```
 Dockerfile                      multi-stage, plus a dev target with Xdebug
 .dockerignore
+.hadolint.yaml                  lint policy, matches the base repo's
 compose.yml                     local dev, ports published, OPcache revalidating
 compose.prod.yml                Traefik-fronted, no published ports
 .env.example

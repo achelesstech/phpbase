@@ -11,7 +11,7 @@
 #   make shell            interactive shell in the built image
 # =============================================================================
 
-REGISTRY    ?= ghcr.io/achelesstech
+REGISTRY    ?= docker.io/achelesstech
 IMAGE       ?= php-base
 PHP         ?= 8.4
 ALPINE      ?= 3.21
@@ -20,7 +20,6 @@ PHP_ALL     ?= 8.2 8.4
 VERSION     ?= $(shell date '+%Y%m%d-%H%M')
 TAG         := $(REGISTRY)/$(IMAGE):$(PHP)
 TAG_PINNED  := $(REGISTRY)/$(IMAGE):$(PHP)-$(VERSION)
-CACHE_REF   := $(REGISTRY)/$(IMAGE):$(PHP)-buildcache
 
 BUILD_ARGS = \
 	--build-arg PHP_VERSION=$(PHP) \
@@ -32,26 +31,27 @@ BUILD_ARGS = \
 build:
 	docker buildx build \
 		$(BUILD_ARGS) \
-		--cache-from type=registry,ref=$(CACHE_REF) \
 		-t $(TAG) -t $(TAG_PINNED) \
 		--load .
 
 build-all:
 	@for v in $(PHP_ALL); do $(MAKE) --no-print-directory build PHP=$$v || exit 1; done
 
-# Push with registry-side layer caching so app repos and CI never recompile
-# extensions. mode=max caches intermediate stages too.
+# Manual escape hatch — CI is the normal publisher. Requires `docker login`
+# against Docker Hub with push rights on $(REGISTRY)/$(IMAGE).
+# No registry cache: CI caches into the GitHub Actions cache instead, so a
+# `*-buildcache` tag no longer exists to pull from.
 push:
 	docker buildx build \
 		$(BUILD_ARGS) \
-		--cache-from type=registry,ref=$(CACHE_REF) \
-		--cache-to   type=registry,ref=$(CACHE_REF),mode=max \
 		--platform linux/amd64,linux/arm64 \
 		-t $(TAG) -t $(TAG_PINNED) \
 		--push .
 
+# Same config CI uses, so a green `make lint` means a green CI lint.
 lint:
-	docker run --rm -i hadolint/hadolint < Dockerfile
+	docker run --rm -i -v "$(CURDIR)/.hadolint.yaml:/.hadolint.yaml:ro" \
+		hadolint/hadolint hadolint --config /.hadolint.yaml - < Dockerfile
 
 scan:
 	trivy image --severity HIGH,CRITICAL --ignore-unfixed $(TAG)

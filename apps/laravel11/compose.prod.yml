@@ -32,7 +32,7 @@ services:
     build:
       context: .
       target: production
-    image: ghcr.io/achelesstech/laravel11-app:latest
+    image: docker.io/achelesstech/laravel11-app:latest
     restart: unless-stopped
     <<: [*app-env, *app-volumes]
     depends_on:
@@ -48,7 +48,7 @@ services:
       # - traefik.http.routers.laravel11.tls.certresolver=letsencrypt
 
   queue:
-    image: ghcr.io/achelesstech/laravel11-app:latest
+    image: docker.io/achelesstech/laravel11-app:latest
     restart: unless-stopped
     command: ["php", "artisan", "queue:work", "--sleep=3", "--tries=3", "--max-time=3600"]
     <<: [*app-env, *app-volumes]
@@ -68,7 +68,7 @@ services:
       retries: 3
 
   scheduler:
-    image: ghcr.io/achelesstech/laravel11-app:latest
+    image: docker.io/achelesstech/laravel11-app:latest
     restart: unless-stopped
     command: ["php", "artisan", "schedule:work"]
     <<: [*app-env, *app-volumes]
@@ -87,7 +87,7 @@ services:
   # One-shot. Migrations belong in a deliberate step, not in every replica's
   # entrypoint where they would run concurrently.
   migrate:
-    image: ghcr.io/achelesstech/laravel11-app:latest
+    image: docker.io/achelesstech/laravel11-app:latest
     command: ["php", "artisan", "migrate", "--force"]
     <<: [*app-env, *app-volumes]
     depends_on:

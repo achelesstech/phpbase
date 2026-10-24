@@ -9,7 +9,7 @@
 # store for Drupal's class loader and fast-bootstrap caches).
 # =============================================================================
 
-ARG BASE_IMAGE=ghcr.io/achelesstech/php-base:8.4
+ARG BASE_IMAGE=docker.io/achelesstech/php-base:8.4
 FROM ${BASE_IMAGE} AS base
 
 ENV APP_ROOT=/var/www/html

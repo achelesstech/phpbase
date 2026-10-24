@@ -20,7 +20,7 @@ services:
     build:
       context: .
       target: production
-    image: ghcr.io/achelesstech/drupal11-app:latest
+    image: docker.io/achelesstech/drupal11-app:latest
     restart: unless-stopped
     <<: *app-env
     volumes:
@@ -39,7 +39,7 @@ services:
       # - traefik.http.routers.drupal11.tls.certresolver=letsencrypt
 
   cron:
-    image: ghcr.io/achelesstech/drupal11-app:latest
+    image: docker.io/achelesstech/drupal11-app:latest
     restart: unless-stopped
     command:
       - /bin/sh
@@ -61,7 +61,7 @@ services:
 
   # docker compose -f compose.prod.yml --profile ops run --rm drush <command>
   drush:
-    image: ghcr.io/achelesstech/drupal11-app:latest
+    image: docker.io/achelesstech/drupal11-app:latest
     entrypoint: ["./vendor/bin/drush"]
     <<: *app-env
     volumes:

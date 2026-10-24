@@ -13,7 +13,7 @@ Everything here goes in the app's own `compose.prod.yml`.
 ```yaml
 services:
   app:
-    image: ghcr.io/achelesstech/lms:latest
+    image: docker.io/achelesstech/lms:latest
     networks: [proxy, internal]
     labels:
       - traefik.enable=true
@@ -217,7 +217,7 @@ container is replaced.
 ```yaml
 services:
   app:
-    image: ghcr.io/achelesstech/moodle52:latest
+    image: docker.io/achelesstech/moodle52:latest
     restart: unless-stopped
     networks: [proxy, internal]
     environment:
@@ -243,7 +243,7 @@ services:
       - traefik.http.routers.lms-login.service=lms
 
   cron:
-    image: ghcr.io/achelesstech/moodle52:latest
+    image: docker.io/achelesstech/moodle52:latest
     command: ["moodle-cron.sh"]
     networks: [internal]
     # no labels — no nginx, no route

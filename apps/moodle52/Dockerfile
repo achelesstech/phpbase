@@ -14,7 +14,7 @@
 # installed — and run `moodle-doctor.sh` in the container afterwards.
 # =============================================================================
 
-ARG BASE_IMAGE=ghcr.io/achelesstech/php-base:8.4
+ARG BASE_IMAGE=docker.io/achelesstech/php-base:8.4
 FROM ${BASE_IMAGE} AS moodle
 
 # 503 = 5.3.x (LTS, Oct 2026)   502 = 5.2.x   501 = 5.1.x   500 = 5.0.x

@@ -12,7 +12,7 @@
 # Docroot is the install root: WordPress has no public/ subdirectory.
 # =============================================================================
 
-ARG BASE_IMAGE=ghcr.io/achelesstech/php-base:8.4
+ARG BASE_IMAGE=docker.io/achelesstech/php-base:8.4
 FROM ${BASE_IMAGE} AS wordpress
 
 ARG WP_VERSION=latest
