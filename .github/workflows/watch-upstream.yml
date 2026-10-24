@@ -1,18 +1,22 @@
 name: watch-upstream
 
 # =============================================================================
-# OPTIONAL. Daily, cheap (~30 s, no build): if php:<line>-fpm-alpine has a new
-# digest since our last publish, start build-base for just those lines.
+# Every 6 hours, cheap (no build): rebuild a published line as soon as any of
+# these changes under it (scripts/check-upstream.sh):
+#   php-image     php:<line>-fpm-alpine has a new digest
+#   alpine-image  alpine:<minor>, the runtime base, has a new digest
+#   apk-upgrades  a package in the published image has an upgrade
+# and dispatch build-base for just those lines.
 #
 # Why: PHP shipped the PHP2Shell fixes (CVE-2026-109618/109619, critical,
 # FPM affected) on Wednesday 21 Oct 2026. The weekly Monday build alone
-# would have published them five days later; this gets them out the same or
-# next day, without rebuilding everything daily.
+# would have published them five days later; this gets them out within six
+# hours, without rebuilding everything every time.
 # =============================================================================
 
 on:
   schedule:
-    - cron: '41 6 * * *'
+    - cron: '17 */6 * * *'
   workflow_dispatch:
 
 permissions:
@@ -22,7 +26,7 @@ permissions:
 jobs:
   watch:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -34,26 +38,25 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Compare upstream digests with what we last built from
+      - name: Compare upstream with what we published
+        id: check
+        run: scripts/check-upstream.sh >> "$GITHUB_OUTPUT"
+
+      - name: Summarise
+        env:
+          REASONS: ${{ steps.check.outputs.reasons }}
+        run: |
+          {
+            echo '| Line | Rebuild reason |'
+            echo '|---|---|'
+            jq -r 'to_entries[] | "| \(.key) | \(if .value == "" then "current" else "`\(.value)`" end) |"' <<<"$REASONS"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Dispatch build-base
+        if: steps.check.outputs.rebuild != ''
         env:
           GH_TOKEN: ${{ github.token }}
+          ONLY: ${{ steps.check.outputs.rebuild }}
         run: |
-          image="$(jq -r .image versions.json)"
-          today="$(date -u +%F)"
-          stale=()
-          while read -r line; do
-            upstream="$(docker buildx imagetools inspect "php:${line}-fpm-alpine" --format '{{json .Manifest}}' | jq -r .digest)"
-            ours="$(docker buildx imagetools inspect "${image}:${line}" --format '{{json .Image}}' 2>/dev/null \
-                    | jq -r '."linux/amd64".config.Labels["org.opencontainers.image.base.digest"] // empty' || true)"
-            if [[ "$upstream" != "$ours" ]]; then
-              echo "::notice::PHP ${line}: upstream ${upstream:0:19}… differs from ours ${ours:0:19}…"
-              stale+=("$line")
-            fi
-          done < <(jq -r --arg t "$today" '.php[] | select((.prerelease // false) | not) | select(.eol >= $t) | .line' versions.json)
-          if [[ ${#stale[@]} -gt 0 ]]; then
-            only="$(IFS=,; echo "${stale[*]}")"
-            gh workflow run build-base.yml -R "$GITHUB_REPOSITORY" -f only="$only" -f publish=true
-            echo "::notice::dispatched build-base for ${only}"
-          else
-            echo "everything current"
-          fi
+          gh workflow run build-base.yml -R "$GITHUB_REPOSITORY" -f only="$ONLY" -f publish=true
+          echo "::notice::dispatched build-base for ${ONLY}"
