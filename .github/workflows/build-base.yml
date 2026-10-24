@@ -1,23 +1,31 @@
 name: build-base
 
 # =============================================================================
-# Weekly rebuild of docker.io/achelesstech/php-base for every supported PHP
-# line, on the newest upstream patch release and the newest Alpine.
+# Weekly (and on-demand) rebuild of docker.io/achelesstech/php-base for every
+# supported PHP line, from pinned digests of php:<line>-fpm-alpine and of the
+# alpine:<minor> inside it.
 #
 #   :8.2 :8.3 :8.4 :8.5 (:latest = 8.5)   floating — what apps pin BY DIGEST
-#   :8.4.27  :8.4-alpine3.24               floating within a patch / Alpine
-#   :8.4.27-20261026                       one per build (rollback, audit)
+#   :8.4.27                                floating within a patch release
+#   :8.4.27-20261026 (or .2, .3, …)        one per build (rollback, audit)
 #   …-dev / :latest-dev                    the same + Xdebug, PCOV, git
-#   :8.6-rc  :8.6-rc-dev                   prerelease canary (never :8.6)
+#   :8.6-rc  :8.6-rc-dev                   pre-release canary (never :8.6);
+#                                          allowed to fail, tagged only on a pass
 #
-# Flow:  resolve ─► build (line × arch, native runners) ─► publish (per line)
-#   resolve   lint; pin every upstream input to a digest (scripts/resolve-matrix.sh)
+# Flow:  resolve ─► build (line × arch, native runners) ─► publish (per line) ─► guards
+#   resolve   lint; pin every upstream input to a digest and pick a build tag
+#             no one has published (scripts/resolve-matrix.sh); a line whose
+#             upstream is stale fails its freshness guard and is not built
 #   build     build + push BY DIGEST (untagged, invisible), pull that exact
-#             digest back, run the behaviour tests, dev tests, framework smoke
-#             tests (amd64) and Trivy. Only a digest that passed everything is
-#             handed to publish.
-#   publish   per line: all platforms passed -> one multi-arch tag set, signed.
-#             A failure on one line never blocks the others.
+#             digest back, report its size, run the behaviour tests, dev
+#             tests, framework smoke tests (amd64) and Trivy. Only a digest
+#             that passed everything is handed to publish.
+#   publish   per line: all platforms passed -> one multi-arch index per
+#             variant, tagged and signed. A failure on one line never blocks
+#             the others.
+#   guards    fails the run, after the healthy lines are published, when a
+#             freshness guard removed a line.
+#   report    on a scheduled run, any failure opens (or bumps) an issue.
 #
 # Required secrets: DOCKERHUB_USERNAME, DOCKERHUB_TOKEN (Read & Write token).
 # =============================================================================
@@ -86,6 +94,7 @@ jobs:
     outputs:
       lines: ${{ steps.resolve.outputs.lines }}
       build: ${{ steps.resolve.outputs.build }}
+      failed: ${{ steps.resolve.outputs.failed }}
       composer: ${{ steps.resolve.outputs.composer }}
       date: ${{ steps.resolve.outputs.date }}
       platforms: ${{ steps.resolve.outputs.platforms }}
@@ -134,8 +143,23 @@ jobs:
           args=()
           if [[ -n "${ONLY}" ]]; then args+=(--only "${ONLY}"); fi
           if [[ "${INCLUDE_EOL}" == "true" ]]; then args+=(--include-eol); fi
-          scripts/resolve-matrix.sh "${args[@]}" >> "$GITHUB_OUTPUT"
+          status=0
+          scripts/resolve-matrix.sh "${args[@]}" >resolved.txt 2>resolve.log || status=$?
+          cat resolve.log >&2   # the ::warning:: / ::error:: lines become annotations
+          cat resolved.txt >> "$GITHUB_OUTPUT"
           echo "platforms=$(jq -c .platforms versions.json)" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Resolver warnings"
+            echo
+            grep -E '^::(warning|error)::' resolve.log | sed -E 's/^::(warning|error)::/- **\1:** /' || echo "None."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "${status}"
+
+      - name: Workflow agrees with the resolver
+        env:
+          BUILD_JSON: ${{ steps.resolve.outputs.build }}
+          COMPOSER_IMAGE: ${{ steps.resolve.outputs.composer }}
+        run: bash test/scripts/workflow.test.sh
 
       - name: Publish this run?
         id: publish
@@ -173,14 +197,21 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # The same names scripts/build-args.sh gives local builds
+      # (test/scripts/workflow.test.sh holds the two lists equal).
       - name: Build arguments
         id: args
         env:
           LINE: ${{ matrix.line }}
           FROM: ${{ matrix.from }}
+          ALPINE_REF: ${{ matrix.alpine_image }}
           UPSTREAM: ${{ matrix.upstream }}
           DIGEST: ${{ matrix.digest }}
           PHP_FULL: ${{ matrix.php_version }}
+          ALPINE_FULL: ${{ matrix.alpine_full }}
+          ALPINE: ${{ matrix.alpine }}
+          ALPINE_DIGEST: ${{ matrix.alpine_digest }}
+          BUILD_TAG: ${{ matrix.build_tag }}
           PRERELEASE: ${{ matrix.prerelease }}
           COMPOSER: ${{ needs.resolve.outputs.composer }}
           DATE: ${{ needs.resolve.outputs.date }}
@@ -189,16 +220,21 @@ jobs:
             echo "list<<EOF"
             echo "PHP_VERSION=${LINE}"
             echo "PHP_IMAGE=${FROM}"
+            echo "ALPINE_IMAGE=${ALPINE_REF}"
             echo "COMPOSER_IMAGE=${COMPOSER}"
-            echo "BASE_NAME=docker.io/library/${UPSTREAM}"
-            echo "BASE_DIGEST=${DIGEST}"
-            echo "BASE_VERSION=${PHP_FULL}-${DATE}"
+            echo "UPSTREAM_IMAGE=${UPSTREAM}"
+            echo "UPSTREAM_DIGEST=${DIGEST}"
+            echo "PHP_FULL_VERSION=${PHP_FULL}"
+            echo "ALPINE_FULL_VERSION=${ALPINE_FULL}"
+            echo "BASE_NAME=docker.io/library/alpine:${ALPINE}"
+            echo "BASE_DIGEST=${ALPINE_DIGEST}"
+            echo "BASE_VERSION=${BUILD_TAG}"
+            # A new date forces a fresh `apk upgrade && apk add` (see Dockerfile).
+            echo "PKG_CACHE_BUST=${DATE}"
             echo "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             echo "VCS_REF=${GITHUB_SHA}"
-            echo "SOURCE_URL=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
-            # Weekly: forces a fresh `apk upgrade && apk add` (see Dockerfile).
-            echo "PKG_CACHE_BUST=${DATE}"
             echo "ALLOW_MISSING_DEV_EXTENSIONS=$([[ "${PRERELEASE}" == "true" ]] && echo 1 || echo 0)"
+            echo "SOURCE_URL=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
@@ -231,7 +267,11 @@ jobs:
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           provenance: mode=max
           sbom: true
-          cache-from: type=gha,scope=${{ env.SCOPE }}
+          # Its own scope (read and written), so it never evicts the runtime
+          # cache; the runtime scope supplies the layers the two share.
+          cache-from: |
+            type=gha,scope=${{ env.SCOPE }}-dev
+            type=gha,scope=${{ env.SCOPE }}
           cache-to: type=gha,scope=${{ env.SCOPE }}-dev,mode=max
 
       - name: Pull the pushed digests for testing
@@ -268,7 +308,25 @@ jobs:
           build-args: ${{ steps.args.outputs.list }}
           load: true
           tags: php-base:test-dev
-          cache-from: type=gha,scope=${{ env.SCOPE }}
+          cache-from: |
+            type=gha,scope=${{ env.SCOPE }}-dev
+            type=gha,scope=${{ env.SCOPE }}
+
+      - name: Image sizes
+        env:
+          LINE: ${{ matrix.line }}
+          PLATFORM: ${{ matrix.platform }}
+          MAX_MB: ${{ matrix.max_size_mb }}
+        run: |
+          mb() { docker image inspect -f '{{.Size}}' "$1" | awk '{ printf "%.1f", $1 / 1000000 }'; }
+          {
+            echo "### PHP ${LINE} ${PLATFORM}: image sizes"
+            echo
+            echo "| Variant | Uncompressed | Ceiling (\`max_size_mb\`, amd64 runtime) |"
+            echo "|---|---|---|"
+            echo "| runtime | $(mb php-base:test) MB | ${MAX_MB} MB |"
+            echo "| dev | $(mb php-base:test-dev) MB | — |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # ── Tests ──────────────────────────────────────────────────────────────
       - name: Behaviour tests (runtime)
@@ -322,6 +380,8 @@ jobs:
     if: always() && needs.resolve.result == 'success' && needs.resolve.outputs.publish == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    # The pre-release canary is allowed to fail here too without failing the run.
+    continue-on-error: ${{ matrix.prerelease }}
     permissions:
       contents: read
       id-token: write   # keyless cosign signature via GitHub OIDC
@@ -338,53 +398,81 @@ jobs:
           path: digests
           merge-multiple: true
 
+      # A stable line with a missing digest fails this job. The canary is
+      # skipped with a warning instead: no tags, and nothing turns red.
       - name: Every platform passed?
+        id: ready
         env:
           PLATFORMS: ${{ needs.resolve.outputs.platforms }}
           LINE: ${{ matrix.line }}
+          PRERELEASE: ${{ matrix.prerelease }}
         run: |
           for arch in $(jq -r '.[] | split("/")[1]' <<<"${PLATFORMS}"); do
             for variant in runtime dev; do
               if [[ ! -s "digests/${variant}-${arch}" ]]; then
+                if [[ "${PRERELEASE}" == "true" ]]; then
+                  echo "::warning::PHP ${LINE} (pre-release canary): no tested ${variant} digest for ${arch}. Not published."
+                  echo "ready=false" >> "$GITHUB_OUTPUT"
+                  exit 0
+                fi
                 echo "::error::PHP ${LINE}: no tested ${variant} digest for ${arch} — a build or test failed. Not published; the previous tags stay as they were."
                 exit 1
               fi
             done
           done
+          echo "ready=true" >> "$GITHUB_OUTPUT"
 
       - name: Log in to Docker Hub
+        if: steps.ready.outputs.ready == 'true'
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        if: steps.ready.outputs.ready == 'true'
 
+      # One multi-platform index per variant over the tested per-arch digests
+      # (watch-upstream reads the labels of its linux/amd64 entry). What is
+      # signed is the digest this create pushed, read from its metadata file,
+      # and a failed create fails the job.
       - name: Create multi-arch tags
         id: tag
+        if: steps.ready.outputs.ready == 'true'
         env:
           TAGS: ${{ toJSON(matrix.tags) }}
           DEV_TAGS: ${{ toJSON(matrix.dev_tags) }}
         run: |
-          publish() {   # publish <variant> <json tag list>
-            local variant="$1" tags="$2" args=() refs=()
+          publish() {   # publish <variant> <json tag list>  -> prints the index digest
+            local variant="$1" tags="$2" meta="imagetools-$1.json" args=() refs=() digest
             while IFS= read -r t; do args+=(-t "$t"); done < <(jq -r '.[]' <<<"$tags")
             for f in digests/"${variant}"-*; do refs+=("${IMAGE}@$(cat "$f")"); done
-            docker buildx imagetools create "${args[@]}" "${refs[@]}"
-            docker buildx imagetools inspect "$(jq -r '.[0]' <<<"$tags")" --format '{{json .Manifest}}' | jq -r .digest
+            docker buildx imagetools create --metadata-file "$meta" "${args[@]}" "${refs[@]}" >&2 || return 1
+            digest="$(jq -r '."containerimage.digest" // ."containerimage.descriptor".digest // empty' "$meta")" || return 1
+            if [[ "$digest" != sha256:* ]]; then
+              echo "::error::imagetools create (${variant}) reported no digest in ${meta}" >&2
+              return 1
+            fi
+            echo "$digest"
           }
-          echo "runtime=$(publish runtime "${TAGS}")" >> "$GITHUB_OUTPUT"
-          echo "dev=$(publish dev "${DEV_TAGS}")" >> "$GITHUB_OUTPUT"
+          # Assigned first: inside `echo "x=$(…)"` a failure would be lost.
+          runtime="$(publish runtime "${TAGS}")"
+          dev="$(publish dev "${DEV_TAGS}")"
+          echo "runtime=${runtime}" >> "$GITHUB_OUTPUT"
+          echo "dev=${dev}" >> "$GITHUB_OUTPUT"
 
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        if: steps.ready.outputs.ready == 'true'
 
       - name: Sign (keyless)
+        if: steps.ready.outputs.ready == 'true'
         env:
           RUNTIME: ${{ steps.tag.outputs.runtime }}
           DEV: ${{ steps.tag.outputs.dev }}
         run: cosign sign --yes "${IMAGE}@${RUNTIME}" "${IMAGE}@${DEV}"
 
       - name: Summary
+        if: steps.ready.outputs.ready == 'true'
         env:
           LINE: ${{ matrix.line }}
           PHP_FULL: ${{ matrix.php_version }}
@@ -401,24 +489,54 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ===========================================================================
+  # A line whose upstream failed a freshness guard was never built. Fail the
+  # run for it, but only after publish, so the healthy lines still ship.
+  guards:
+    needs: [resolve, publish]
+    if: always() && needs.resolve.result == 'success' && needs.resolve.outputs.failed != '[]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Lines a freshness guard removed
+        env:
+          FAILED: ${{ needs.resolve.outputs.failed }}
+        run: |
+          jq -r '.[] | "::error::PHP \(.line): \(.reason) — not built."' <<<"${FAILED}"
+          {
+            echo "### Lines not built"
+            echo
+            jq -r '.[] | "- PHP \(.line): \(.reason)"' <<<"${FAILED}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+
+  # ===========================================================================
   # A scheduled run that fails only emails whoever last edited the cron line.
   # Open (or bump) an issue instead, so a broken weekly build cannot go unseen.
   report:
-    needs: [resolve, build, publish]
-    if: always() && github.event_name == 'schedule' && (needs.resolve.result == 'failure' || needs.build.result == 'failure' || needs.publish.result == 'failure')
+    needs: [resolve, build, publish, guards]
+    if: >-
+      always() && github.event_name == 'schedule' && (
+        needs.resolve.result == 'failure' || needs.build.result == 'failure' ||
+        needs.publish.result == 'failure' || needs.guards.result == 'failure')
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     permissions:
       issues: write
     steps:
       - name: Open or update the tracking issue
         env:
           GH_TOKEN: ${{ github.token }}
+          FAILED: ${{ needs.resolve.outputs.failed }}
         run: |
           title="Weekly php-base build failed"
           url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          details=""
+          if [[ -n "${FAILED}" && "${FAILED}" != "[]" ]]; then
+            details=$'\n\nNot built (freshness guard):\n'"$(jq -r '.[] | "- PHP \(.line): \(.reason)"' <<<"${FAILED}")"
+          fi
           n="$(gh issue list -R "$GITHUB_REPOSITORY" --state open --search "in:title \"${title}\"" --json number -q '.[0].number')"
           if [[ -n "$n" ]]; then
-            gh issue comment "$n" -R "$GITHUB_REPOSITORY" --body "Failed again: ${url}"
+            gh issue comment "$n" -R "$GITHUB_REPOSITORY" --body "Failed again: ${url}${details}"
           else
-            gh issue create -R "$GITHUB_REPOSITORY" --title "$title" --body "Run: ${url}"
+            gh issue create -R "$GITHUB_REPOSITORY" --title "$title" --body "Run: ${url}${details}"
           fi
