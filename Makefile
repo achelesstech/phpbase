@@ -61,7 +61,7 @@ lint:
 		rootfs/usr/local/bin/php-base-every rootfs/usr/local/bin/php-base-info \
 		rootfs/usr/local/bin/php-base-validate rootfs/usr/local/bin/nginx-validate.sh
 	docker run --rm -v "$(CURDIR):/src:ro" -w /src koalaman/shellcheck:v0.11.0 -S warning -x -s bash \
-		scripts/*.sh test/*.sh test/frameworks/*.sh
+		scripts/*.sh test/*.sh test/runtime/*.sh test/frameworks/*.sh
 
 scan:
 	trivy image --severity HIGH,CRITICAL --ignore-unfixed $(TAG)

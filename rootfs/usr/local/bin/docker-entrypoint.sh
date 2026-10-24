@@ -3,6 +3,7 @@
 # docker-entrypoint.sh — achelesstech/php-base (runs as www-data, non-root)
 # =============================================================================
 #   1. Reset the runtime dir        /tmp/php-base           (wiped every start)
+#      and recreate $HOME           /tmp/php-base/home      (/home/www-data links here)
 #   2. PHP ini overrides from env   /tmp/php-base/php/zz-runtime.ini
 #   3. FPM pool overrides from env  /tmp/php-base/fpm/zz-runtime.conf
 #   4. nginx http{} settings        /tmp/php-base/nginx/http.d/10-php-base.conf
@@ -47,6 +48,8 @@ reset_runtime() {
              "$RUNTIME/nginx/tmp/client-body" "$RUNTIME/nginx/tmp/proxy" \
              "$RUNTIME/nginx/tmp/fastcgi" "$RUNTIME/nginx/tmp/uwsgi" \
              "$RUNTIME/nginx/tmp/scgi"
+    # $HOME: /home/www-data is a symlink to this (the root is read-only).
+    mkdir -m 0750 "$RUNTIME/home"
 }
 
 # ── Role ─────────────────────────────────────────────────────────────────────

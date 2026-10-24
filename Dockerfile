@@ -203,13 +203,20 @@ ENV TZ=UTC \
 # stays behind owned by the deleted uid 82. Every tool that writes to $HOME
 # (npm, git, composer without COMPOSER_HOME) then fails with EACCES: the real
 # cause of the npm_config_cache workaround in both Laravel apps.
+#
+# /home/www-data is a symlink to /tmp/php-base/home, a 0750 directory the
+# entrypoint creates at every start. The root filesystem is meant to run
+# read-only and the image writes only under /tmp, so a real directory here
+# could never be written. $HOME and the passwd entry stay /home/www-data.
+# When the entrypoint is bypassed (--entrypoint sh), $HOME dangles until
+# something creates /tmp/php-base/home.
 RUN set -eux; \
     deluser  www-data 2>/dev/null || true; \
     delgroup www-data 2>/dev/null || true; \
     rm -rf /home/www-data; \
     addgroup -g "${GROUP_ID}" -S www-data; \
     adduser  -u "${USER_ID}" -S -D -H -h /home/www-data -G www-data -s /sbin/nologin www-data; \
-    install -d -o www-data -g www-data -m 0750 /home/www-data; \
+    ln -s /tmp/php-base/home /home/www-data; \
     # Upstream also leaves APP_ROOT world-writable (1777) and owned by uid 82.
     chown www-data:www-data "${APP_ROOT}"; \
     chmod 0755 "${APP_ROOT}"; \

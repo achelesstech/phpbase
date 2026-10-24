@@ -8,7 +8,7 @@
 # application-image path and not host file-sharing settings.
 # =============================================================================
 
-ARG BASE_IMAGE=php-base-next:8.4
+ARG BASE_IMAGE=local/php-base:8.4
 FROM ${BASE_IMAGE}
 
 # Code and hooks are copied ROOT-owned (the default) — the recommended pattern.
