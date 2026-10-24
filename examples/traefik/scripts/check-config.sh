@@ -12,9 +12,12 @@
 # that is otherwise discovered by :443 going down.
 # =============================================================================
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 
-IMAGE="${IMAGE:-traefik:v3.6}"
+# The exact image compose.yml runs, tag and digest, so a version bump is
+# checked by the binary it deploys. IMAGE=... overrides it to try another.
+IMAGE="${IMAGE:-$(sed -n 's/^ *image: *\(traefik:[^ ]*\).*/\1/p' compose.yml)}"
+[ -n "$IMAGE" ] || { echo "no traefik image found in compose.yml" >&2; exit 1; }
 NAME="traefik-cfgcheck-$$"
 BOOT_SECONDS="${BOOT_SECONDS:-8}"
 
@@ -74,7 +77,7 @@ if a != b:
 print(f"  \033[32mok\033[0m    identical, {len(a)} ranges")
 PY
 
-echo "== Traefik accepts the configuration =="
+echo "== Traefik accepts the configuration ($IMAGE) =="
 
 # Isolated: its own throwaway ACME dir (so "no such file" errors do not appear)
 # and no Docker provider reachable. The unreachable-Docker errors are therefore

@@ -19,7 +19,11 @@ init: ## One-time: create the proxy network and local directories
 	  || docker network create $(NETWORK)
 	@mkdir -p certs secrets
 	@chmod 700 certs secrets
-	@test -f .env || { cp .env.example .env; echo "created .env — edit it"; }
+	@# DOCKER_GID differs between hosts, so fill it in from this one.
+	@test -f .env || { \
+	   gid="$$(stat -c %g /var/run/docker.sock)" || exit 1; \
+	   sed "s/^DOCKER_GID=$$/DOCKER_GID=$$gid/" .env.example > .env; \
+	   echo "created .env with DOCKER_GID=$$gid — set TRAEFIK_DOMAIN in it"; }
 	@echo "next: make token && make htpasswd USER=admin"
 
 token: ## Store the Cloudflare DNS API token (prompts, not echoed)
@@ -84,7 +88,7 @@ doctor: ## Diagnose a running Traefik (forwarded headers, TLS, certs, rate limit
 cf-ips: ## Check the committed Cloudflare ranges against cloudflare.com/ips
 	@./scripts/cf-ips.sh
 
-certs: ## List the domains in the ACME store and when they expire
+certs: ## List issued certificates; fail if any expire within 21 days
 	@./scripts/acme-certs.sh
 
 backup: ## Tar the ACME store and secrets (contains private keys — handle it)

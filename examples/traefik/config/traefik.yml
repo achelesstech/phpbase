@@ -216,6 +216,23 @@ entryPoints:
         graceTimeout: 30s
 
 # ---------------------------------------------------------------------------
+# Backend transport — Traefik -> app containers
+# ---------------------------------------------------------------------------
+# How long Traefik keeps an idle keep-alive connection to a backend open for
+# reuse. 90s is Traefik's own default, written down because the rule it has
+# to obey lives in another project:
+#
+#   BACKENDS MUST KEEP IDLE CONNECTIONS OPEN LONGER THAN THIS.
+#
+# If the backend closes first, Traefik can send a request down a connection
+# the backend is closing at that moment, and the client gets a 502 the app
+# never logged. php-base's nginx uses keepalive_timeout 120s, so Traefik always
+# closes first. Raise this only together with every backend's keep-alive.
+serversTransport:
+  forwardingTimeouts:
+    idleConnTimeout: 90s
+
+# ---------------------------------------------------------------------------
 # Providers
 # ---------------------------------------------------------------------------
 providers:
@@ -251,14 +268,28 @@ providers:
 # ---------------------------------------------------------------------------
 # Certificate Resolvers
 # ---------------------------------------------------------------------------
+# WHICH RESOLVER A SITE USES — one rule:
+#
+#   DNS for the domain on Cloudflare  ->  tls.certresolver=cloudflare
+#   DNS anywhere else (Namecheap, GoDaddy, a local registrar, ...)
+#                                     ->  tls.certresolver=letsencrypt
+#
+# `cloudflare` is the websecure default, and it can only issue for zones the
+# Cloudflare token can edit. A router for any other domain MUST set
+# tls.certresolver=letsencrypt. Otherwise its certificate never issues, the
+# log shows a DNS-01 error for a zone the token cannot see, and browsers get a
+# TLS handshake failure (sniStrict is on in dynamic/tls.yml).
+#
 # ── EDIT THIS ──────────────────────────────────────────────────────────────
 # Both `email:` values below are placeholders. They are here rather than in
 # .env because static config has no variable expansion, so this is the only
-# place they can live. Let's Encrypt sends expiry warnings to this address and
-# rejects obviously fake ones — put a real mailbox here before `make up`.
+# place they can live. Let's Encrypt rejects obviously fake addresses, so put
+# a real mailbox here before `make up`. It is the account contact only: Let's
+# Encrypt stopped emailing expiry warnings in 2025. `make certs` and
+# `make doctor` flag certificates expiring within 21 days instead.
 certificatesResolvers:
 
-  # ── DNS-01 via Cloudflare — the default ───────────────────────────────────
+  # ── DNS-01 via Cloudflare — the default, for domains on Cloudflare ────────
   # Works for wildcards, works when :80 is unreachable from the internet, and
   # works before DNS points at this host. Needs CF_DNS_API_TOKEN.
   cloudflare:
@@ -281,10 +312,12 @@ certificatesResolvers:
           # and 0 is correct when `resolvers` is set.
           delayBeforeChecks: 0s
 
-  # ── HTTP-01 fallback — for domains not on Cloudflare ──────────────────────
-  # This still works despite the :80 -> :443 redirect above. Traefik installs
-  # its own higher-priority router for /.well-known/acme-challenge/ that wins
-  # over the redirection. Cannot issue wildcards.
+  # ── HTTP-01 — for every domain whose DNS is not on Cloudflare ────────────
+  # Needs the domain's A record pointing at this host and :80 reachable from
+  # the internet. This still works despite the :80 -> :443 redirect above.
+  # Traefik installs its own higher-priority router for
+  # /.well-known/acme-challenge/ that wins over the redirection. Cannot issue
+  # wildcards.
   letsencrypt:
     acme:
       email: "admin@example.com"

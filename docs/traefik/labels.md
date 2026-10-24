@@ -59,10 +59,44 @@ work. Pick one and stay consistent.
 | `…services.<n>.loadbalancer.server.port=8080` | **always here** | `php-base` listens on 8080. Traefik guesses only from `EXPOSE`, and guesses wrong when there is more than one |
 | `…routers.<n>.rule` | **always** | see below |
 | `…routers.<n>.entrypoints=websecure` | **always** | omit it and the router is attached to *every* entryPoint, including `ping` and `metrics` |
-| `…routers.<n>.tls.certresolver` | always on websecure | `cloudflare` (DNS-01, wildcards) or `letsencrypt` (HTTP-01) |
+| `…routers.<n>.tls.certresolver` | always on websecure | `cloudflare` if the domain's DNS is on Cloudflare, otherwise `letsencrypt` — see [below](#which-certificate-resolver) |
 | `…routers.<n>.middlewares` | strongly | without it there is no HSTS, no rate limit, no header stripping |
 | `…routers.<n>.tls.options=modern@file` | optional | TLS 1.3 only; for APIs and admin tools |
 | `…routers.<n>.priority` | rarely | only to beat another router on the same path |
+
+## Which certificate resolver
+
+One rule, decided by where the domain's **DNS** is hosted, not where it was
+registered:
+
+| The domain's DNS is on | Label | Challenge |
+|---|---|---|
+| Cloudflare | `tls.certresolver=cloudflare` | DNS-01 through the Cloudflare API token |
+| anywhere else — Namecheap, GoDaddy, a local registrar, your own DNS | `tls.certresolver=letsencrypt` | HTTP-01 on `:80` |
+
+`cloudflare` is the `websecure` default, so a router that omits the label gets
+it. It can only issue for zones the Cloudflare token can edit. A site whose DNS
+is anywhere else **must** set `letsencrypt` explicitly; otherwise the
+certificate never issues, the Traefik log shows a DNS-01 error for a zone the
+token cannot see, and browsers get a TLS handshake failure.
+
+```yaml
+# DNS on Cloudflare
+- traefik.http.routers.lms.tls.certresolver=cloudflare
+
+# DNS at Namecheap, GoDaddy, a local registrar, ...
+- traefik.http.routers.shop.tls.certresolver=letsencrypt
+```
+
+HTTP-01 needs the domain's `A` record pointing at this host and `:80` reachable
+from the internet before Traefik first sees the router, and it cannot issue
+wildcards. The `:80 → :443` redirect does not get in its way.
+
+Both resolvers fail quietly: an issuance that keeps failing leaves the old
+certificate in place until it expires. Let's Encrypt no longer emails expiry
+warnings, so `make certs` and `make doctor` (in `examples/traefik/`) exit
+non-zero when a certificate expires within 21 days. Run one from cron, or
+alert on the Prometheus metric `traefik_tls_certs_not_after`.
 
 ## Rules
 
@@ -106,7 +140,7 @@ Available (see that file for what each does):
 
 | Name | For |
 |---|---|
-| `chain-web@file` | public web apps — rate limit + security headers + compression |
+| `chain-web@file` | public web apps — rate limit + security headers + compression (see below) |
 | `chain-api@file` | JSON APIs — adds CORS, no CSP |
 | `chain-admin@file` | basic auth + strict rate limit |
 | `chain-admin-restricted@file` | the above + client-IP allowlist |
@@ -118,6 +152,31 @@ Available (see that file for what each does):
 | `redirect-to-apex@file` | `www.` → apex |
 
 Order is execution order, left to right on the request.
+
+**Compression happens here, not in the app.** nginx inside `php-base` no longer
+compresses dynamic responses (`NGINX_GZIP=0` by default); it only serves
+pre-compressed `.gz` files that already exist. The `compress` middleware in
+`chain-web` and `chain-api` is what compresses HTML and JSON, so a router that
+uses neither chain serves them uncompressed. Do not turn `NGINX_GZIP` back on
+behind Traefik: compressing twice costs CPU on both sides and gains nothing.
+
+### `retry@file` — for connection refused during deploys
+
+When a deploy replaces a container, Traefik can for a moment still send
+requests to the address of the one that is stopping. Those fail as
+`connection refused`, which the client sees as a 502. The shared `retry`
+middleware retries such a request up to 3 times, starting 100 ms apart, and
+only when the backend sent no response at all:
+
+```yaml
+- traefik.http.routers.lms.middlewares=chain-web@file,retry@file
+```
+
+Put it **last**, so a retry replays only the call to the backend and not the
+rate limit. Attach it when you see brief 502s while deploying. Leave it off
+routers that take payments or other POSTs that must never run twice: a
+connection that dies after the app received the request but before it
+answered is retried too.
 
 ### Defining one locally
 
@@ -160,27 +219,51 @@ healthcheck, which curls `/fpm-ping`:
       test: ["CMD-SHELL", "pgrep -f 'queue:work' >/dev/null || exit 1"]
 ```
 
-Every template in [`examples/`](../../examples/) already does this.
+Every app template in [`examples/`](../../examples/) already does this.
 
-## Health, and why Traefik does not need to know about it
+## Health: Traefik routes only to healthy containers
 
-Traefik will not route to a container that is not running, but by default it
-does not read Docker's health status — a container that is `unhealthy` still
-receives traffic. Two options, and the first is usually enough:
+Traefik's Docker provider skips any container whose healthcheck status is not
+`healthy`. A container that is still `starting`, or has turned `unhealthy`,
+gets no traffic until it reports healthy. That is what keeps a deploy from
+sending requests to an app that is still booting.
+
+It is also why `start-interval` matters. `php-base` declares
+
+```
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --start-interval=2s --retries=3
+```
+
+During the start period Docker probes every 2 s instead of every 30 s, so a
+new container is `healthy`, and routed, a few seconds after nginx and PHP-FPM
+are up. Without `start-interval`, the first probe would come 30 s after
+start, and the site would have no backend for those 30 s on every deploy.
+
+`--start-interval` needs **Docker Engine 25 or later**. Check with
+`docker version`. Older engines ignore it and fall back to the 30 s interval.
+
+Two consequences:
+
+- **Do not override the healthcheck with something slower** in the app's
+  compose file, and do not disable it: with no healthcheck at all, Traefik
+  routes as soon as the container starts, before PHP-FPM is ready.
+- **A container that stays unhealthy simply drops out of the route.** With one
+  replica the router disappears and the whole site returns 404, so
+  `restart: unless-stopped` still matters: `php-base` exits when php-fpm or
+  nginx dies, and Docker restarts it.
+
+A Traefik-side health check is only worth adding when you run replicas and
+want Traefik to stop using one faster than Docker's 30 s interval notices:
 
 ```yaml
-# 1. Let the orchestrator restart it. php-base already exits the container when
-#    php-fpm or nginx dies, so an unhealthy container becomes a stopped one.
-restart: unless-stopped
-
-# 2. Traefik-side health check, for when you run replicas
-- traefik.http.services.lms.loadbalancer.healthcheck.path=/fpm-ping
+- traefik.http.services.lms.loadbalancer.healthcheck.path=/up
 - traefik.http.services.lms.loadbalancer.healthcheck.interval=10s
 - traefik.http.services.lms.loadbalancer.healthcheck.timeout=3s
 ```
 
-`/fpm-ping` is the right target because it goes through FastCGI. A static nginx
-`return 200` stays green while PHP-FPM is dead.
+Point it at a path the app answers through PHP (Laravel's `/up`, for example).
+A static file stays green while PHP-FPM is dead. `php-base`'s own status paths
+are on its internal `127.0.0.1:8081` listener, which Traefik cannot reach.
 
 ## Replicas and sessions
 

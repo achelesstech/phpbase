@@ -208,8 +208,11 @@ tls:
   certResolver: cloudflare
 ```
 
-The entryPoint default, so a router that omits `tls.certresolver` still gets a
-certificate rather than failing. Per-router labels override it.
+The entryPoint default, so a router that omits `tls.certresolver` uses
+`cloudflare`. Per-router labels override it. Because the default can only
+issue for Cloudflare zones, a router for a domain whose DNS is anywhere else
+**must** set `tls.certresolver=letsencrypt` — see
+[`certificatesResolvers`](#certificatesresolvers).
 
 **No `options:` key here**, and this one is a trap worth knowing. The TLS option
 set named `default` in `dynamic/tls.yml` is registered *without* a provider
@@ -229,6 +232,23 @@ This was in the first draft of this file. `make check` did not catch it — the
 error is per-router, so it only appears once a router exists — which is why the
 verification below used a throwaway container with labels.
 
+## `serversTransport`
+
+```yaml
+serversTransport:
+  forwardingTimeouts:
+    idleConnTimeout: 90s
+```
+
+How long Traefik keeps an idle keep-alive connection to a backend for reuse.
+90s is Traefik's default; it is written down because the rule it has to obey
+lives in the backends: **every backend must keep idle connections open longer
+than this.** If the backend closes first, Traefik can send a request down a
+connection the backend is closing at that moment, and the client gets a 502
+that the app never logged. `php-base`'s nginx uses `keepalive_timeout 120s`,
+so Traefik always closes first. Change this only together with the backends'
+keep-alive.
+
 ## `providers`
 
 ### `docker`
@@ -244,8 +264,9 @@ watch: true
 even `:ro`, grants the full Docker API, which is root on the host: anyone who
 reaches it can start a privileged container that bind-mounts `/`. The `:ro`
 protects the socket *file*, not the API behind it. Traefik is the most
-internet-exposed process here, so it gets `socket-proxy`, which permits
-`/containers`, `/networks`, `/events`, `/version` and refuses every POST.
+internet-exposed process here, so it gets `socket-proxy`, which answers only
+Traefik and only the GETs the Docker provider makes (version, ping, containers,
+events, networks), and refuses everything else, every POST included.
 
 **`exposedByDefault: false`** makes routing opt-in via `traefik.enable=true`.
 The default (`true`) means every container that lands on the proxy network is
@@ -287,8 +308,22 @@ cloudflare:
         delayBeforeChecks: 0s
 ```
 
+**Which resolver a site uses** is one rule, decided by where the domain's DNS
+is hosted:
+
+| DNS on | Router label |
+|---|---|
+| Cloudflare | `tls.certresolver=cloudflare` (DNS-01), also the `websecure` default |
+| anywhere else — Namecheap, GoDaddy, a local registrar | `tls.certresolver=letsencrypt` (HTTP-01) |
+
+`cloudflare` can only issue for zones its API token can edit, so a router for
+any other domain **must** set `letsencrypt`.
+
 `email` is hardcoded because there is no variable expansion here. Changing it
-means editing this file.
+means editing this file. It is the ACME account contact only: Let's Encrypt
+stopped sending expiry-warning emails in 2025. `make certs` and `make doctor`
+exit non-zero when a certificate expires within 21 days; run one from cron, or
+alert on the Prometheus metric `traefik_tls_certs_not_after`.
 
 `storage` is one JSON file holding the ACME account key and every issued
 certificate with its private key. Back it up (`make backup`), keep it `0600`.
@@ -310,8 +345,9 @@ timed out" that fixes itself on the third attempt.
 was a flat sleep on *every* issuance and renewal, on top of the propagation
 check that already does this properly.
 
-Also here: `letsencrypt`, HTTP-01, as a fallback for domains not on Cloudflare.
-It cannot issue wildcards and needs `:80` reachable from the internet.
+Also here: `letsencrypt`, HTTP-01, for every domain whose DNS is not on
+Cloudflare. It cannot issue wildcards, and needs the domain's `A` record
+pointing at this host and `:80` reachable from the internet.
 
 **Why DNS-01 is the default:** wildcards, issuance before DNS points at this
 host, and it works with `:80` firewalled — which matters if you later move to a
@@ -343,7 +379,7 @@ becomes your largest metric.
 | `secrets/.htpasswd` | nothing — read per request |
 | `secrets/cf_dns_api_token` | `make restart` — read once at start |
 | a container's labels | nothing — the events stream picks it up |
-| the `traefik:v3.6` tag | `make pull && make up` |
+| the Traefik image (tag and digest in `compose.yml`) | `make check && make up` — `make check` boots the new image first |
 
 ## Before every `make up`
 

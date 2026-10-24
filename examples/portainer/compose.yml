@@ -143,7 +143,9 @@ services:
 
       - traefik.http.routers.portainer.rule=Host(`${PORTAINER_DOMAIN}`)
       - traefik.http.routers.portainer.entrypoints=websecure
-      - traefik.http.routers.portainer.tls.certresolver=cloudflare
+      # cloudflare if PORTAINER_DOMAIN's DNS is on Cloudflare, letsencrypt
+      # otherwise. Set in .env; see ../../docs/traefik/labels.md.
+      - traefik.http.routers.portainer.tls.certresolver=${PORTAINER_CERT_RESOLVER:-cloudflare}
       - traefik.http.routers.portainer.tls.options=modern@file
 
       # IP allowlist + basic auth + strict rate limit, in front of Portainer's

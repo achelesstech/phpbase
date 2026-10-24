@@ -12,7 +12,7 @@
 # later. Each check below corresponds to one of those.
 # =============================================================================
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 
 COMPOSE="${COMPOSE:-docker compose}"
 STATIC="config/traefik.yml"
@@ -152,7 +152,7 @@ sec "placeholders"
 # Shipped placeholders that fail quietly rather than loudly.
 grep -q 'admin@example.com' "$STATIC" \
     && bad "the ACME email is still the placeholder admin@example.com —
-        Let's Encrypt expiry warnings go nowhere, and it may reject the account" \
+        Let's Encrypt may reject the account, and has no way to reach you" \
     || ok "ACME email has been set"
 
 # -F, not a regex: the value in the file is an escaped-for-YAML regex
@@ -197,7 +197,18 @@ fi
 
 # -----------------------------------------------------------------------------
 sec "certificates"
-./scripts/acme-certs.sh 2>/dev/null | sed 's/^/        /' || true
+# Let's Encrypt no longer emails expiry warnings, so this is the warning.
+certs_out="$(./scripts/acme-certs.sh --warn-days 21 2>&1)"
+certs_rc=$?
+sed '/./s/^/        /' <<<"$certs_out"
+if [ "$certs_rc" -eq 0 ]; then
+    ok "no certificate expires within 21 days"
+else
+    bad "a certificate expires within 21 days, or a certificate or store
+        cannot be read (see above). Expiring: Traefik renews 30 days ahead,
+        so renewal is failing — check 'make logs'. Unreadable: the stores are
+        root-owned 0600 — run the doctor with sudo"
+fi
 
 # -----------------------------------------------------------------------------
 sec "live spoofing test"

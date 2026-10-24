@@ -198,6 +198,11 @@ Replaced with `tecnativa/docker-socket-proxy`, on an `internal: true` network
 `PING` and explicitly refusing `POST` — which is the setting that actually
 matters; without `POST: 0` the proxy is barely better than the socket.
 
+> **Since replaced.** The example now uses `wollomatic/socket-proxy`: read-only,
+> non-root, GET-only allowlist, answering only Traefik. See
+> [`compose.yml`](../../examples/traefik/compose.yml). The text here describes
+> the config as audited.
+
 ### 13. The Cloudflare token was an environment variable
 
 `CF_DNS_API_TOKEN` in `environment:` is visible in `docker inspect`, in
@@ -353,7 +358,8 @@ a `traefik/whoami` container carrying real labels:
    crash-looped on `can't create ... haproxy.cfg: Read-only file system`.
    Tmpfs-ing that directory instead masks the `haproxy.cfg.template` the image
    ships and fails one line later. Dropped `read_only` there (kept on Traefik)
-   with the reason recorded in the file.
+   with the reason recorded in the file. (The haproxy proxy has since been
+   replaced by `wollomatic/socket-proxy`, which runs read-only.)
 
 Both would have presented as "the proxy is up but nothing works".
 

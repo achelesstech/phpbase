@@ -3,9 +3,21 @@
 Bare Debian/Ubuntu VPS to a working edge, in order. Roughly 30 minutes, most of
 it waiting for `apt`.
 
-Assumes: Ubuntu 24.04 or Debian 12, root or sudo access, a domain on
-Cloudflare. Adjust package names for other distributions; nothing here is
-Ubuntu-specific except `apt` and `ufw`.
+Assumes: Ubuntu 24.04 or Debian 12, root or sudo access, and Docker Engine 25
+or later (step 2 installs the current one). Adjust package names for other
+distributions; nothing here is Ubuntu-specific except `apt` and `ufw`.
+
+Domains can be on Cloudflare DNS or anywhere else (Namecheap, GoDaddy, a local
+registrar). Which one decides each site's certificate resolver:
+
+| The domain's DNS is on | Resolver | Needs |
+|---|---|---|
+| Cloudflare | `cloudflare` (DNS-01), the default | the API token below |
+| anywhere else | `letsencrypt` (HTTP-01) | an `A` record to the VPS and `:80` open |
+
+A site whose DNS is not on Cloudflare **must** set
+`tls.certresolver=letsencrypt` on its router; the default resolver can only
+issue for Cloudflare zones. See [`labels.md`](labels.md#which-certificate-resolver).
 
 ---
 
@@ -24,8 +36,8 @@ Copy it once — Cloudflare will not show it again. **Not** the Global API Key:
 that is account-wide, cannot be scoped, and cannot be revoked without breaking
 everything else that uses it.
 
-**Decide your DNS records.** For each site, an `A` record to the VPS IPv4,
-proxied (orange cloud). The Traefik dashboard hostname too.
+**Decide your DNS records.** For each site, an `A` record to the VPS IPv4 —
+on Cloudflare, proxied (orange cloud). The Traefik dashboard hostname too.
 
 **Do not add `AAAA` records unless the VPS actually has working IPv6.** A stale
 or half-configured `AAAA` means Cloudflare tries IPv6 first and your sites
@@ -34,9 +46,11 @@ one, the Cloudflare IPv6 ranges in
 [`config/traefik.yml`](../../examples/traefik/config/traefik.yml) are what keep
 client IPs correct — they are already there.
 
-Certificates come from DNS-01, so the records do not need to resolve to a
-working server before you start. You can issue certificates first and point
-traffic later.
+For Cloudflare domains, certificates come from DNS-01, so the records do not
+need to resolve to a working server before you start: you can issue
+certificates first and point traffic later. Domains elsewhere use HTTP-01, so
+their `A` record must already point at this VPS, with `:80` open, before the
+site's router first appears.
 
 ---
 
@@ -111,7 +125,13 @@ apt -y install docker-ce docker-ce-cli containerd.io \
                docker-buildx-plugin docker-compose-plugin
 
 usermod -aG docker deploy
+docker version --format '{{.Server.Version}}'   # must be 25 or later
 ```
+
+**Docker 25 or later is required.** `php-base` images declare
+`HEALTHCHECK --start-interval=2s`, and Traefik routes only to containers Docker
+reports as healthy. Older engines ignore `--start-interval`, so a new container
+waits for the first 30 s probe before it gets any traffic, on every deploy.
 
 `docker` group membership is root-equivalent — anyone in it can start a
 privileged container that mounts `/`. Only give it to accounts you would give
@@ -183,13 +203,25 @@ cd /opt/traefik
 
 docker network create proxy
 make init
+grep DOCKER_GID .env            # filled in by make init
 ```
+
+`make init` writes `DOCKER_GID` into `.env`: the group that owns the Docker
+socket, which the socket proxy joins to read it. It differs between hosts. If
+you create `.env` by hand, set it yourself:
+
+```bash
+stat -c %g /var/run/docker.sock
+```
+
+Compose refuses to start while it is empty.
 
 Edit the placeholders — `make doctor` will flag any you miss:
 
 | File | Change |
 |---|---|
 | `.env` | `TRAEFIK_DOMAIN=traefik.yourdomain.com` |
+| `.env` | `DOCKER_GID` — check it is set (see above) |
 | `config/traefik.yml` | `acme.email` — **twice**, both resolvers |
 | `config/dynamic/middlewares.yml` | `cors` origin regex → your domain |
 | `config/dynamic/middlewares.yml` | `ipallowlist-admin.sourceRange` → add your egress IP |
@@ -213,7 +245,9 @@ make htpasswd USER=admin        # dashboard login
 
 ## 5. The first certificate — staging first
 
-Uncomment in `config/traefik.yml`, under **both** resolvers:
+Uncomment in `config/traefik.yml`, under **both** resolvers (the line is
+written once, under `cloudflare`; copy it under `letsencrypt` too if you have
+non-Cloudflare domains):
 
 ```yaml
       caServer: https://acme-staging-v02.api.letsencrypt.org/directory
@@ -230,7 +264,9 @@ make up
 make logs      # watch the DNS challenge
 ```
 
-You want to see `Certificates obtained successfully`. Your browser will warn
+You want to see `Certificates obtained successfully`. If a non-Cloudflare
+domain fails with a DNS-01 error instead, its router is missing
+`tls.certresolver=letsencrypt`. Your browser will warn
 about an untrusted issuer — that is correct for staging.
 
 If the challenge hangs or times out:
@@ -294,7 +330,8 @@ cp -r /tmp/php-base/examples/moodle/. .
 cp .env.example .env && $EDITOR .env
 ```
 
-Add the routing labels — see [`labels.md`](labels.md) — then:
+Add the routing labels — see [`labels.md`](labels.md), and pick the
+certificate resolver by where the domain's DNS is — then:
 
 ```bash
 docker compose -f compose.prod.yml up -d --build
@@ -315,8 +352,13 @@ and Traefik picks it up from the Docker events stream within a second.
 # backend starts seeing Cloudflare as the client. Nothing logs an error.
 0 6 * * 1  cd /opt/traefik && make cf-ips || mail -s "traefik: cloudflare IPs changed" you@example.com
 
-# Certificate expiry, in case a renewal has been quietly failing.
-0 7 * * *  cd /opt/traefik && make certs
+# Certificate expiry. Let's Encrypt no longer emails warnings, and a renewal
+# that keeps failing is otherwise silent. make certs exits 1 when a certificate
+# expires within 21 days (Traefik renews at 30, so renewal is failing), or
+# when it cannot read a store. Traefik writes certs/acme-*.json as root, mode
+# 0600, so put this line in ROOT's crontab (sudo crontab -e); as deploy it
+# fails every day with "cannot read".
+0 7 * * *  cd /opt/traefik && make certs || mail -s "traefik: certificate expiring" you@example.com
 
 # The ACME store holds your account key and every certificate's private key.
 0 3 * * *  cd /opt/traefik && make backup && rclone move traefik-state-*.tgz remote:backups/
