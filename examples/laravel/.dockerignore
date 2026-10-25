@@ -4,7 +4,7 @@
 .gitignore
 .env
 .env.*
-!.env.example
+auth.json
 
 node_modules
 vendor
@@ -12,26 +12,26 @@ public/build
 public/hot
 public/storage
 
+# Runtime state: the Dockerfile recreates the directories.
 storage/app/*
-!storage/app/.gitignore
 storage/framework/cache/*
 storage/framework/sessions/*
+storage/framework/testing/*
 storage/framework/views/*
 storage/logs/*
-
+storage/pail
 bootstrap/cache/*
-!bootstrap/cache/.gitignore
 
 tests
 phpunit.xml
 phpstan.neon
 .phpunit.result.cache
+.phpunit.cache
 
 compose*.yml
-docker-compose*.yml
 Dockerfile
+renovate.json
 *.md
-!README.md
 
 .idea
 .vscode

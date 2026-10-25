@@ -1,115 +1,118 @@
 # =============================================================================
-# Production — Laravel 13 behind an external Traefik
+# Production — Laravel 13 behind Traefik (examples/traefik)
 # =============================================================================
-#   docker compose -f compose.prod.yml up -d
-#   docker compose -f compose.prod.yml --profile ops run --rm migrate
+#   docker compose -f compose.prod.yml up -d --build      (or pull, from CI)
+#   docker compose -f compose.prod.yml run --rm migrate   (each deploy)
 #
-# No `ports:` on the app — Traefik reaches it on the shared `proxy` network.
-# TLS, HSTS and redirects are Traefik's job, not this image's.
+# No `ports:`. Traefik reaches the app on the shared `proxy` network
+# (docker network create proxy); TLS, HSTS and redirects are Traefik's job.
 # =============================================================================
 
-x-app-env: &app-env
-  env_file: .env
-  environment:
-    APP_ENV:   production
-    APP_DEBUG: "false"
-    PHP_OPCACHE_VALIDATE_TIMESTAMPS: "0"
-    PHP_MEMORY_LIMIT: 256M
-    # Size the pool to the container. Rough rule:
-    #   max_children ~= (memory limit - 128M) / average request RSS
-    FPM_MAX_CHILDREN: "16"
-    FPM_MAX_REQUESTS: "500"
+# The app image: its one name. build-app.yml pushes the same one (APP_IMAGE
+# there). Keep the repository PRIVATE: it contains your code. See README.md.
+x-image: &image ${APP_IMAGE:-docker.io/achelesstech/laravel-app}:${APP_TAG:-latest}
 
-# Only storage/app holds real state. bootstrap/cache is deliberately NOT a
-# volume: the caches are baked into the image, and a persistent volume would
-# shadow them with a stale copy that survives every deploy.
-x-app-volumes: &app-volumes
+# What app, queue, scheduler and migrate share.
+x-laravel: &laravel
+  image: *image
+  restart: unless-stopped
+  # required: false only so `docker compose config` works without a .env; the
+  # ${…:?} checks below still refuse to start without one.
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    APP_ENV: production
+    APP_DEBUG: "false"
+  # Hardened run: nothing is writable but /tmp and the storage/app volume.
+  read_only: true
+  # /tmp holds uploads in flight (and ImageMagick's cache): at least
+  # 2 x post_max_size + 32 MB. It is RAM, charged to mem_limit, and
+  # FPM_MAX_CHILDREN=auto reserves its size; always give it a size=.
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,size=256m
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  pids_limit: 256
+  # Only storage/app holds state. bootstrap/cache is deliberately not a volume:
+  # its caches are baked into the image, and a volume would keep a stale copy
+  # across every deploy.
   volumes:
     - app-storage:/var/www/html/storage/app
+  networks: [internal]
+  depends_on:
+    db:
+      condition: service_healthy
 
 services:
+  # Web role: nginx + PHP-FPM (the image's default command).
   app:
+    <<: *laravel
     build:
       context: .
       target: production
-    image: docker.io/achelesstech/laravel13-app:latest
-    restart: unless-stopped
-    <<: [*app-env, *app-volumes]
-    depends_on:
-      db:
-        condition: service_healthy
+    # FPM_MAX_CHILDREN=auto: (1024 - 256 OPcache - 64 - 256 tmpfs) / 64 = 7 workers.
+    mem_limit: 1g
+    # nginx drains for up to 15 s, then PHP-FPM for up to 30 s.
+    stop_grace_period: 60s
     networks: [proxy, internal]
     labels:
       - traefik.enable=true
       - traefik.docker.network=proxy
-      - traefik.http.services.laravel13.loadbalancer.server.port=8080
-      # - traefik.http.routers.laravel13.rule=Host(`app.example.com`)
-      # - traefik.http.routers.laravel13.entrypoints=websecure
-      # - traefik.http.routers.laravel13.tls.certresolver=letsencrypt
+      - traefik.http.routers.${TRAEFIK_ROUTER:?set TRAEFIK_ROUTER in .env}.rule=Host(`${APP_DOMAIN:?set APP_DOMAIN in .env}`)
+      - traefik.http.routers.${TRAEFIK_ROUTER}.entrypoints=websecure
+      - traefik.http.routers.${TRAEFIK_ROUTER}.tls.certresolver=${TRAEFIK_CERT_RESOLVER:-cloudflare}
+      - traefik.http.routers.${TRAEFIK_ROUTER}.middlewares=chain-web@file
+      - traefik.http.services.${TRAEFIK_ROUTER}.loadbalancer.server.port=8080
 
+  # Worker role. --max-time makes the worker exit after an hour, which frees
+  # whatever memory it leaked; `restart:` starts it again.
   queue:
-    image: docker.io/achelesstech/laravel13-app:latest
-    restart: unless-stopped
-    command: ["php", "artisan", "queue:work", "--sleep=3", "--tries=3", "--max-time=3600"]
-    <<: [*app-env, *app-volumes]
-    environment:
-      # Never let a worker race the app over bootstrap/cache.
-      LARAVEL_SKIP_CACHE: "1"
-    depends_on:
+    <<: *laravel
+    command: [php, artisan, queue:work, --max-time=3600]
+    mem_limit: 512m
+    # After app: Docker fills a new volume from the image when the first
+    # container mounts it, and containers created at the same moment race
+    # ("mkdir …/_data/public: file exists").
+    depends_on: &after-app
       db:
         condition: service_healthy
-    networks: [internal]
-    # This container runs no nginx, so the image healthcheck (which curls
-    # /fpm-ping) can never pass. Replace it with a process check.
-    healthcheck:
-      test: ["CMD-SHELL", "pgrep -f 'queue:work' >/dev/null || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
+      app:
+        condition: service_started
+    # SIGTERM lets the current job finish first.
+    stop_grace_period: 130s
 
+  # Scheduler role: schedule:run on every minute boundary. Healthy while runs
+  # keep succeeding (the image's heartbeat check).
   scheduler:
-    image: docker.io/achelesstech/laravel13-app:latest
-    restart: unless-stopped
-    command: ["php", "artisan", "schedule:work"]
-    <<: [*app-env, *app-volumes]
-    environment:
-      LARAVEL_SKIP_CACHE: "1"
-    depends_on:
-      db:
-        condition: service_healthy
-    networks: [internal]
-    healthcheck:
-      test: ["CMD-SHELL", "pgrep -f 'schedule:work' >/dev/null || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
+    <<: *laravel
+    command: [php-base-every, "60", php, artisan, schedule:run]
+    mem_limit: 512m
+    depends_on: *after-app
+    # A run in progress is allowed to finish.
+    stop_grace_period: 130s
 
-  # One-shot. Migrations belong in a deliberate step, not in every replica's
-  # entrypoint where they would run concurrently.
+  # One-shot, never in every replica's entrypoint where migrations would run
+  # concurrently:  docker compose -f compose.prod.yml run --rm migrate
   migrate:
-    image: docker.io/achelesstech/laravel13-app:latest
-    command: ["php", "artisan", "migrate", "--force"]
-    <<: [*app-env, *app-volumes]
-    depends_on:
-      db:
-        condition: service_healthy
-    networks: [internal]
-    healthcheck:
-      disable: true
+    <<: *laravel
+    command: [php, artisan, migrate, --force]
+    restart: "no"
+    mem_limit: 512m
     profiles: [ops]
 
   db:
-    image: postgres:16-alpine
+    image: docker.io/library/postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
     restart: unless-stopped
-    env_file: .env
     environment:
-      POSTGRES_DB:       ${DB_DATABASE:-laravel}
-      POSTGRES_USER:     ${DB_USERNAME:-laravel}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+      POSTGRES_DB: ${DB_DATABASE:-laravel}
+      POSTGRES_USER: ${DB_USERNAME:-laravel}
+      POSTGRES_PASSWORD: ${DB_PASSWORD?set DB_PASSWORD in .env}
+    # PostgreSQL 18 keeps its data under /var/lib/postgresql/18/; mount the parent.
     volumes:
-      - db-data:/var/lib/postgresql/data
+      - db-data:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-laravel} -d ${DB_DATABASE:-laravel}"]
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -123,4 +126,3 @@ networks:
   proxy:
     external: true
   internal:
-    driver: bridge

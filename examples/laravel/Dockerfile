@@ -1,109 +1,114 @@
 # =============================================================================
-# Laravel 13 — application image
+# Laravel 13 — application image on achelesstech/php-base
 # =============================================================================
-# Copy this file, .dockerignore, compose*.yml and docker/ into the app repo.
+# Copy this directory into the app repository (see README.md).
 #
-# Laravel 13 requires PHP >= 8.3; from 13.3 it pulls Symfony 8 components that
-# require 8.4. Hence the 8.4 base.
+#   vendor      composer install          (-dev base: Composer lives there)
+#   assets      npm ci + vite build       (Node; never reaches the image)
+#   build       full source, autoloader, framework caches baked
+#   production  root-owned code on the runtime base       <- compose.prod.yml
+#   dev         the -dev base, source bind-mounted         <- compose.yml
 #
-# Pin the base by digest. `:8.4` alone means your app image changes silently
-# whenever the base is rebuilt, and you cannot reproduce last week's build.
-# Renovate keeps the digest current — see renovate.json in this directory.
+# Laravel 13 needs PHP >= 8.3; from 13.3 it pulls Symfony 8, which needs 8.4.
+#
+# Both bases are pinned by digest: `:8.4` alone changes the app image whenever
+# the base is rebuilt, and last week's build can no longer be reproduced.
+# README.md shows how to read the two digests; Renovate keeps them current.
+# A tag-only reference (--build-arg PHP_BASE_IMAGE=…:8.4) builds as well.
 # =============================================================================
 
-ARG BASE_IMAGE=docker.io/achelesstech/php-base:8.4
-FROM ${BASE_IMAGE} AS base
+ARG PHP_BASE_IMAGE=docker.io/achelesstech/php-base:8.4@sha256:<runtime>
+ARG PHP_BASE_DEV_IMAGE=docker.io/achelesstech/php-base:8.4-dev@sha256:<dev>
 
-ENV APP_ROOT=/var/www/html
+# =============================================================================
+# vendor — Composer dependencies, cached on the lockfile alone
+# =============================================================================
+FROM ${PHP_BASE_DEV_IMAGE} AS vendor
+
+# The base's APP_ROOT, spelled out for the relative paths below.
 WORKDIR /var/www/html
-
-# =============================================================================
-# deps — composer + node, cached on lockfiles alone
-# =============================================================================
-FROM base AS deps
-
-USER root
-RUN apk add --no-cache nodejs npm
-USER www-data
-
-# Lockfiles first: this layer is reused until a dependency actually changes.
 COPY --chown=www-data:www-data composer.json composer.lock ./
-# --no-scripts because artisan isn't present yet; --no-autoloader because the
-# optimized autoloader needs the full source, which arrives in the next stage.
-RUN composer install \
-        --no-dev --no-interaction --no-progress \
-        --no-scripts --no-autoloader --prefer-dist
-
-COPY --chown=www-data:www-data package.json package-lock.json* ./
-RUN npm ci --include=dev
+# --no-scripts: artisan isn't here yet. --no-autoloader: the optimized
+# autoloader needs the full source, which arrives in `build`.
+RUN composer install --no-dev --no-interaction --no-progress --prefer-dist \
+        --no-scripts --no-autoloader
 
 # =============================================================================
-# build — full source, autoloader, frontend assets
+# assets — Vite build. Only public/build/ leaves this stage.
 # =============================================================================
-FROM deps AS build
+FROM docker.io/library/node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS assets
+
+WORKDIR /app
+COPY package.json package-lock.json* .npmrc* ./
+# Commit package-lock.json: `npm ci` installs exactly what it lists. Without
+# one (a fresh `laravel new` has none), `npm install` resolves the ranges.
+RUN if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
+COPY . .
+# Tailwind scans Blade views under vendor/ (pagination), and packages such as
+# Livewire ship their JavaScript there.
+COPY --from=vendor /var/www/html/vendor ./vendor
+RUN npm run build
+
+# =============================================================================
+# build — autoloader and framework caches
+# =============================================================================
+FROM vendor AS build
 
 COPY --chown=www-data:www-data . .
 
 # dump-autoload runs post-autoload-dump, which is where package:discover
-# happens — so the earlier --no-scripts is recovered here, not lost.
-RUN composer dump-autoload --optimize --classmap-authoritative
-
-RUN npm run build
-
-# Bake the framework caches into the IMAGE, not into a startup hook.
+# happens, so the earlier --no-scripts is recovered here.
 #
-# Running config:cache at container start writes into bootstrap/cache. If that
-# path is a shared volume across app + queue + scheduler (the usual compose
-# layout), four containers race to write the same files at boot and a worker
-# can read a half-written cache. Baked here they are immutable, identical
-# across every replica, and cost zero startup time.
-#
-# config:cache requires the build-time env to be representative. Values that
-# differ per environment must be read via config() from env at RUNTIME — never
-# env() outside a config file, which is a Laravel rule anyway.
-RUN php artisan config:clear \
-    && php artisan view:cache \
-    && php artisan event:cache
+# The caches are baked into the IMAGE rather than written at start: the root
+# filesystem is read-only, and app, queue and scheduler would otherwise race
+# over the same files. config:cache is the exception: it would freeze the
+# build's (empty) environment, so configuration is read from the runtime
+# environment instead. Read env() only inside config/*.php, as Laravel requires.
+RUN set -eux; \
+    mkdir -p storage/app/public storage/app/private storage/framework/cache/data \
+             storage/framework/sessions storage/framework/views storage/logs bootstrap/cache; \
+    composer dump-autoload --no-dev --optimize --classmap-authoritative; \
+    php artisan storage:link; \
+    php artisan event:cache; \
+    php artisan route:cache; \
+    php artisan view:cache
 
 # =============================================================================
 # production
 # =============================================================================
-FROM base AS production
+FROM ${PHP_BASE_IMAGE} AS production
 
-COPY --from=build --chown=www-data:www-data /var/www/html /var/www/html
+# Code is ROOT-owned: a compromised PHP process cannot rewrite it.
+COPY --from=build --chown=root:root /var/www/html /var/www/html
+COPY --from=assets --chown=root:root /app/public/build /var/www/html/public/build
+# Hooks root-owned and not writable by www-data (no --chown).
+COPY docker/entrypoint.d/ /docker-entrypoint.d/
 
 USER root
-RUN rm -rf \
-        /var/www/html/node_modules \
-        /var/www/html/tests \
-        /var/www/html/.git \
-        /var/www/html/.github \
-    && rm -f \
-        /var/www/html/.env \
-        /var/www/html/.env.example \
-        /var/www/html/phpunit.xml \
-        /var/www/html/phpstan.neon
+# Only what Laravel writes belongs to www-data. With read_only: true only the
+# storage/app volume is writable at runtime; owning storage/ here gives that
+# volume www-data ownership when Docker first populates it.
+RUN set -eux; \
+    chown root:root /var/www/html; \
+    chown -R www-data:www-data storage bootstrap/cache; \
+    ln -s /etc/nginx/presets/laravel.conf /etc/nginx/conf.d/default.conf; \
+    nginx-validate.sh
 USER www-data
 
-COPY --chown=www-data:www-data docker/vhost.conf          /etc/nginx/conf.d/vhost.conf
-COPY --chown=www-data:www-data docker/entrypoint.d/       /docker-entrypoint.d/
-
-# Fail the build, not production, on a bad vhost.
-RUN nginx-validate.sh
+# Blade compiles a view it has not seen before (the /up page, error pages,
+# mail templates) into this directory. The root filesystem is read-only, so it
+# lives on the /tmp tmpfs; docker/entrypoint.d/10-laravel-views.sh seeds it
+# with the views baked above at every start.
+ENV VIEW_COMPILED_PATH=/tmp/laravel/views
 
 # =============================================================================
-# dev — adds Xdebug and the toolchain the production image deliberately omits
+# dev — the -dev base (Composer, Xdebug off until XDEBUG_MODE is set); the
+# source is bind-mounted by compose.yml
 # =============================================================================
-# Target it explicitly:  docker compose build --build-arg ... / target: dev
-FROM base AS dev
+FROM ${PHP_BASE_DEV_IMAGE} AS dev
 
 USER root
-RUN apk add --no-cache --virtual .xdebug-deps $PHPIZE_DEPS \
-    && pecl install xdebug \
-    && docker-php-ext-enable xdebug \
-    && apk del .xdebug-deps \
-    && apk add --no-cache nodejs npm git
-
-COPY docker/vhost.conf    /etc/nginx/conf.d/vhost.conf
-COPY docker/entrypoint.d/ /docker-entrypoint.d/
+RUN set -eux; \
+    ln -s /etc/nginx/presets/laravel.conf /etc/nginx/conf.d/default.conf; \
+    nginx-validate.sh
 USER www-data

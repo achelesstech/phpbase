@@ -1,23 +1,14 @@
 # =============================================================================
 # Local development — Laravel 13
 # =============================================================================
-#   docker compose up -d
-#   docker compose run --rm artisan migrate
+#   docker compose up -d --build
+#   docker compose exec app composer install
+#   docker compose exec app php artisan migrate
 #
-# Plain HTTP on :8000, source bind-mounted, OPcache revalidating.
+# http://localhost:8080. The source is bind-mounted and OPcache re-checks file
+# times, so edits show up without a rebuild. Xdebug is loaded but off:
+#   XDEBUG_MODE=debug docker compose up -d
 # =============================================================================
-
-x-dev-env: &dev-env
-  env_file: .env
-  environment:
-    APP_ENV: local
-    APP_DEBUG: "true"
-    # Local dev is plain HTTP — secure cookies would never be sent back.
-    PHP_SESSION_COOKIE_SECURE: "0"
-    # Pick up code changes without restarting.
-    PHP_OPCACHE_VALIDATE_TIMESTAMPS: "1"
-    PHP_DISPLAY_ERRORS: "On"
-    PHP_MEMORY_LIMIT: 512M
 
 services:
   app:
@@ -25,56 +16,39 @@ services:
       context: .
       target: dev
     ports:
-      - "8000:8080"
-    <<: *dev-env
-    volumes:
-      - ./:/var/www/html
-    depends_on:
-      db:
-        condition: service_healthy
-
-  # docker compose run --rm artisan <command>
-  artisan:
-    build:
-      context: .
-      target: dev
-    entrypoint: ["php", "artisan"]
-    <<: *dev-env
-    volumes:
-      - ./:/var/www/html
-    depends_on:
-      db:
-        condition: service_healthy
-    healthcheck:
-      disable: true
-    profiles: [tools]
-
-  # docker compose run --rm composer install
-  composer:
-    build:
-      context: .
-      target: dev
-    entrypoint: ["composer"]
+      - "127.0.0.1:8080:8080"
+    env_file:
+      - path: .env
+        required: false
     environment:
-      COMPOSER_MEMORY_LIMIT: "-1"
+      APP_ENV: local
+      APP_DEBUG: "true"
+      APP_URL: http://localhost:8080
+      # Plain HTTP locally: secure cookies would never come back.
+      SESSION_SECURE_COOKIE: "false"
+      PHP_OPCACHE_VALIDATE_TIMESTAMPS: "1"
+      XDEBUG_MODE: ${XDEBUG_MODE:-off}
+      # Same fallback as the db service below.
+      DB_PASSWORD: ${DB_PASSWORD:-laravel}
+    # Lets Xdebug reach the IDE on the host (Linux).
+    extra_hosts:
+      - host.docker.internal:host-gateway
     volumes:
       - ./:/var/www/html
-    healthcheck:
-      disable: true
-    profiles: [tools]
+    depends_on:
+      db:
+        condition: service_healthy
 
   db:
-    image: postgres:16-alpine
+    image: docker.io/library/postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
     environment:
-      POSTGRES_DB:       ${DB_DATABASE:-laravel}
-      POSTGRES_USER:     ${DB_USERNAME:-laravel}
+      POSTGRES_DB: ${DB_DATABASE:-laravel}
+      POSTGRES_USER: ${DB_USERNAME:-laravel}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-laravel}
-    ports:
-      - "5432:5432"
     volumes:
-      - db-data:/var/lib/postgresql/data
+      - db-data:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-laravel} -d ${DB_DATABASE:-laravel}"]
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 5s
       timeout: 5s
       retries: 10
