@@ -34,11 +34,14 @@ $databases['default']['default'] = [
 $settings['hash_salt'] = $env('DRUPAL_HASH_SALT');
 
 // ── Host header ──────────────────────────────────────────────────────────────
-// Only the public host name is accepted; any other Host gets a 400.
+// Only the public host name is accepted; any other Host gets a 400. Required:
+// an empty list would silently accept any Host (cache poisoning, password
+// reset links to another domain), so refuse to start instead.
 $app_domain = $env('APP_DOMAIN');
-$settings['trusted_host_patterns'] = $app_domain === ''
-  ? []
-  : ['^' . preg_quote($app_domain) . '$'];
+if ($app_domain === '') {
+  throw new RuntimeException('settings.php: set APP_DOMAIN in .env');
+}
+$settings['trusted_host_patterns'] = ['^' . preg_quote($app_domain) . '$'];
 
 // ── Files ────────────────────────────────────────────────────────────────────
 // public:// is web/sites/default/files (the default) and private:// is

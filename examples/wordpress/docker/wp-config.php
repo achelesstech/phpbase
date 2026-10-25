@@ -55,8 +55,9 @@ define('DISABLE_WP_CRON', true);
 // ── Debugging ────────────────────────────────────────────────────────────────
 define('WP_ENVIRONMENT_TYPE', $wp_env('WORDPRESS_ENVIRONMENT_TYPE', 'production'));
 define('WP_DEBUG', filter_var($wp_env('WORDPRESS_DEBUG', 'false'), FILTER_VALIDATE_BOOLEAN));
-define('WP_DEBUG_DISPLAY', WP_DEBUG);
-// The root filesystem is read-only: PHP's error log (container output) only.
+// Never in pages, even with WP_DEBUG on: the root filesystem is read-only, so
+// errors go to PHP's error log (container output) only.
+define('WP_DEBUG_DISPLAY', false);
 define('WP_DEBUG_LOG', false);
 
 unset($wp_env, $wp_secret, $wp_key, $wp_url);

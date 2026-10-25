@@ -22,6 +22,9 @@ x-drupal: &drupal
     - path: .env
       required: false
   environment:
+    # settings.php builds trusted_host_patterns from this and refuses to start
+    # without it; set here too, so compose refuses first.
+    APP_DOMAIN: ${APP_DOMAIN:?set APP_DOMAIN in .env}
     # Drush builds absolute links (cron mails, one-time logins) from this.
     DRUSH_OPTIONS_URI: https://${APP_DOMAIN:?set APP_DOMAIN in .env}
   # Hardened run: nothing is writable but /tmp and the two files volumes.
