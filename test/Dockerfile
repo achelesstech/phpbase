@@ -2,7 +2,7 @@
 # Test fixture — the smallest correct consumer of php-base
 # =============================================================================
 # Built by test/run.sh. Also the minimal reference for the base's contract:
-# a vhost on 8080 that includes /etc/nginx/php-base/health.conf.
+# a vhost on 8080; the status pages and /fpm-ping come from the base.
 #
 # Built as an image rather than bind-mounted, so the test exercises the real
 # application-image path and not host file-sharing settings.

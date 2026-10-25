@@ -7,6 +7,8 @@
 #              any other command -> none (no false "unhealthy" on workers)
 #   fpm        GET /fpm-ping through FastCGI must answer "pong". This fails
 #              when PHP-FPM is dead, unlike a static nginx `return 200`.
+#              It is on the internal status listener, 127.0.0.1:8081
+#              (HEALTHCHECK_PORT, HEALTHCHECK_PATH override it).
 #              HEALTHCHECK_URL, if set, is probed as well (e.g.
 #              http://127.0.0.1:8080/up for Laravel's health route).
 #   http       only HEALTHCHECK_URL
@@ -39,7 +41,7 @@ probe_url() {
 
 case "$MODE" in
     fpm)
-        url="http://127.0.0.1:${HEALTHCHECK_PORT:-8080}${HEALTHCHECK_PATH:-/fpm-ping}"
+        url="http://127.0.0.1:${HEALTHCHECK_PORT:-8081}${HEALTHCHECK_PATH:-/fpm-ping}"
         response="$(curl -fsS --max-time 4 "$url" 2>/dev/null)" || fail "no answer from ${url}"
         case "$response" in *pong*) ;; *) fail "unexpected answer from ${url}: ${response}" ;; esac
         [ -z "${HEALTHCHECK_URL:-}" ] || probe_url "$HEALTHCHECK_URL"

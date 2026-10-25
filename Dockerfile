@@ -431,12 +431,14 @@ USER www-data
 
 EXPOSE 8080
 
-# Role-aware (see healthcheck.sh): /fpm-ping through FastCGI for the web role,
-# heartbeat for php-base-every containers, nothing for other commands.
+# Role-aware (see healthcheck.sh): /fpm-ping on 127.0.0.1:8081 through FastCGI
+# for the web role, heartbeat for php-base-every containers, nothing for other
+# commands. Every 2 s during the start period, so Traefik (which routes only to
+# healthy containers) gets a new container within seconds; every 30 s after.
 # Kept on one line: hadolint anchors an inline ignore to the instruction's
 # first line, so a wrapped HEALTHCHECK cannot be exempted from DL3025.
 # hadolint ignore=DL3025
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD healthcheck.sh
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --start-interval=2s --retries=3 CMD healthcheck.sh
 
 # SIGTERM reaches s6-svscan through tini; it stops nginx first with SIGQUIT
 # (in-flight requests finish), then php-fpm with SIGQUIT and the scheduler and
