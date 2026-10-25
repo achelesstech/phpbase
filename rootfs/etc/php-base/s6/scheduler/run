@@ -1,0 +1,8 @@
+#!/bin/sh
+# The in-container scheduler: SCHEDULER_COMMAND every SCHEDULER_INTERVAL
+# seconds (default 60), in the application root. Enabled by the entrypoint
+# only when SCHEDULER_COMMAND is set. The command is parsed by a shell, so it
+# may contain quotes and arguments with spaces. php-base-every handles the
+# SIGTERM of a stop: it lets a run in progress finish.
+cd "${APP_ROOT:-/var/www/html}" || exit 1
+exec php-base-every --name scheduler "${SCHEDULER_INTERVAL:-60}" -- sh -c "$SCHEDULER_COMMAND"

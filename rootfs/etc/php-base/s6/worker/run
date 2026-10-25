@@ -1,0 +1,8 @@
+#!/bin/sh
+# The in-container worker: WORKER_COMMAND, in the application root, restarted
+# by s6 whenever it exits (Laravel's `queue:work --max-time` relies on this).
+# Enabled by the entrypoint only when WORKER_COMMAND is set. The command is
+# parsed by a shell, so it may contain quotes and arguments with spaces; a
+# single command is exec'd by sh, so SIGTERM reaches the worker itself.
+cd "${APP_ROOT:-/var/www/html}" || exit 1
+exec sh -c "$WORKER_COMMAND"

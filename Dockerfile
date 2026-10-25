@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # =============================================================================
-# achelesstech/php-base — PHP-FPM + nginx + supervisor, non-root, proxy-fronted
+# achelesstech/php-base — PHP-FPM + nginx under s6, non-root, proxy-fronted
 # =============================================================================
 # One image per PHP line (8.2, 8.3, 8.4, 8.5), rebuilt weekly from the newest
 # upstream patch release on the newest Alpine the official PHP image supports.
@@ -262,7 +262,7 @@ RUN set -eux; \
         imagemagick-jpeg \
         imagemagick-webp \
         nginx \
-        supervisor \
+        s6 \
         tini \
         tzdata
 
@@ -328,7 +328,7 @@ ARG BASE_DIGEST=unknown
 # image the binaries came from. scripts/check-upstream.sh compares both
 # digests (index digests) with what the registry serves now.
 LABEL org.opencontainers.image.title="achelesstech/php-base" \
-      org.opencontainers.image.description="PHP-FPM + nginx + supervisor, non-root, for Laravel, Drupal, Moodle and WordPress" \
+      org.opencontainers.image.description="PHP-FPM + nginx under s6, non-root, for Laravel, Drupal, Moodle and WordPress" \
       org.opencontainers.image.url="https://hub.docker.com/r/achelesstech/php-base" \
       org.opencontainers.image.source="${SOURCE_URL}" \
       org.opencontainers.image.vendor="achelesstech" \
@@ -346,24 +346,28 @@ LABEL org.opencontainers.image.title="achelesstech/php-base" \
 # ── Ownership, modes, release file, self-checks ──────────────────────────────
 # COPY keeps the build machine's file modes (0664/0775 on a umask-002 host),
 # so the same commit used to build into different images on different hosts.
-# Config, presets and hook directories are ROOT-owned: www-data reads them and
-# never writes them. At runtime it writes /tmp (incl. /tmp/php-base) and
-# whatever volumes the app mounts — nothing else.
+# Config, presets, s6 service definitions and hook directories are ROOT-owned:
+# www-data reads them and never writes them. At runtime it writes /tmp (incl.
+# /tmp/php-base) and whatever volumes the app mounts — nothing else. `chown -h`
+# because the s6 definitions' supervise/ and event/ are symlinks into
+# /tmp/php-base, which does not exist at build time.
 #
 # Then the build fails unless the image is what it claims to be. (Captured
 # output, never `! pipeline`: `set -e` ignores a failing pipeline after `!`.)
 RUN --mount=type=bind,from=php-upstream,source=/etc/alpine-release,target=/tmp/upstream-alpine-release \
     set -eux; \
     mkdir -p /docker-entrypoint.d /etc/nginx/conf.d /etc/nginx/server.d /etc/php-base /usr/local/etc/php-fpm.d; \
-    for d in /etc/nginx /etc/supervisor /etc/php-base /usr/local/etc/php /usr/local/etc/php-fpm.d /docker-entrypoint.d; do \
-        chown -R root:root "$d"; \
+    for d in /etc/nginx /etc/php-base /usr/local/etc/php /usr/local/etc/php-fpm.d /docker-entrypoint.d; do \
+        chown -Rh root:root "$d"; \
         find "$d" -type d -exec chmod 0755 {} +; \
         find "$d" -type f -exec chmod 0644 {} +; \
     done; \
     chmod 0755 /usr/local/bin/docker-entrypoint.sh /usr/local/bin/healthcheck.sh \
                /usr/local/bin/nginx-validate.sh /usr/local/bin/php-base-validate \
-               /usr/local/bin/supervisor-fatal-listener.sh /usr/local/bin/php-base-every \
-               /usr/local/bin/php-base-info; \
+               /usr/local/bin/php-base-web /usr/local/bin/php-base-every \
+               /usr/local/bin/php-base-info \
+               /etc/php-base/s6/.s6-svscan/SIGTERM /etc/php-base/s6/.s6-svscan/finish \
+               /etc/php-base/s6/fail-fast /etc/php-base/s6/*/run; \
     # nginx opens its compiled-in prefix/log paths before reading the config
     # when run without `-e` (e.g. an operator's `nginx -s reload`).
     chown -R www-data:www-data /var/lib/nginx /var/log/nginx; \
@@ -406,13 +410,16 @@ RUN --mount=type=bind,from=php-upstream,source=/etc/alpine-release,target=/tmp/u
     [ -z "$orphans" ] || { echo "owned by uid/gid 82: $orphans"; exit 1; }; \
     setid="$(find / -xdev -type f -perm /6000 -print)"; \
     [ -z "$setid" ] || { echo "setuid/setgid files: $setid"; exit 1; }; \
-    # Build tooling, sources, PEAR and Composer are -dev only.
+    # Build tooling, sources, PEAR and Composer are -dev only; Python (which
+    # supervisord dragged in) and supervisord itself are gone for good.
     for p in /usr/src/php.tar.xz /usr/local/include /usr/local/lib/php/build /usr/local/lib/php/PEAR \
              /usr/local/bin/phpize /usr/local/bin/php-config /usr/local/bin/docker-php-* \
              /usr/local/bin/pear /usr/local/bin/pecl /usr/local/bin/peardev /usr/local/etc/pear.conf \
-             /usr/local/php /usr/local/bin/php-cgi /usr/local/bin/phpdbg /usr/local/bin/composer; do \
+             /usr/local/php /usr/local/bin/php-cgi /usr/local/bin/phpdbg /usr/local/bin/composer \
+             /usr/bin/python3 /usr/bin/supervisord /etc/supervisor; do \
         if [ -e "$p" ] || [ -L "$p" ]; then echo "must not be in the runtime image: $p"; exit 1; fi; \
-    done
+    done; \
+    if command -v python3; then echo "python3 must not be in the runtime image"; exit 1; fi
 
 # Same names and meaning as the official image. Declared after the last use of
 # the PHP_VERSION build argument (the line), which this ENV replaces.
@@ -431,9 +438,13 @@ EXPOSE 8080
 # hadolint ignore=DL3025
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD healthcheck.sh
 
+# SIGTERM reaches s6-svscan through tini; it stops nginx first with SIGQUIT
+# (in-flight requests finish), then php-fpm with SIGQUIT and the scheduler and
+# worker with SIGTERM. Kill timeouts are 15 s (nginx), 30 s (FPM) and 120 s
+# (scheduler, worker), so a compose stop_grace_period should cover them.
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["tini", "--", "docker-entrypoint.sh"]
-CMD ["supervisord", "-c", "/etc/supervisor/supervisord.conf"]
+CMD ["php-base-web"]
 
 # =============================================================================
 # dev — published as :X.Y-dev
@@ -457,10 +468,11 @@ ENV PHPIZE_DEPS="autoconf dpkg-dev dpkg file g++ gcc libc-dev make pkgconf re2c"
     COMPOSER_HOME=/tmp/composer \
     COMPOSER_ALLOW_SUPERUSER=0
 
-# From the PHP image: the source tarball, headers, phpize/php-config and the
-# build files they use, the docker-php-* helpers, and PEAR/PECL where the line
-# still has them (8.6 has none; the globs then match nothing).
-COPY --from=php-upstream /usr/src/php.tar.xz /usr/src/php.tar.xz.asc /usr/src/
+# From the PHP image: the source tarball (and its signature, where the line
+# ships one), headers, phpize/php-config and the build files they use, the
+# docker-php-* helpers, and PEAR/PECL where the line still has them (8.6 has
+# none; the globs then match nothing).
+COPY --from=php-upstream /usr/src/php.tar.xz /usr/src/php.tar.xz.as[c] /usr/src/
 COPY --from=php-upstream /usr/local/include/ /usr/local/include/
 COPY --from=php-upstream /usr/local/lib/php/ /usr/local/lib/php/
 COPY --from=php-upstream /usr/local/bin/docker-php-* /usr/local/bin/phpize /usr/local/bin/php-config \

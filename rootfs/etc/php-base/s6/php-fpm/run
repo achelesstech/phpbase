@@ -1,0 +1,4 @@
+#!/bin/sh
+# php-fpm, in the foreground, logging to the container's stderr. SIGQUIT
+# (./down-signal) is its graceful stop: in-flight requests finish first.
+exec php-fpm --nodaemonize --force-stderr

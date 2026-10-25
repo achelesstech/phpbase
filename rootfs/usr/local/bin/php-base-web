@@ -1,0 +1,31 @@
+#!/bin/sh
+# =============================================================================
+# php-base-web — the web role: nginx + PHP-FPM (+ scheduler, worker) under s6
+# =============================================================================
+# The image's default CMD. docker-entrypoint.sh renders the s6 scan directory
+# (render_services) and then execs this, which execs s6-svscan, so the process
+# tree is
+#
+#     tini -- s6-svscan -- s6-supervise php-fpm -- php-fpm
+#                       |- s6-supervise nginx   -- nginx
+#                       |- s6-supervise scheduler -- php-base-every   (SCHEDULER_COMMAND)
+#                       `- s6-supervise worker    -- sh -c "$WORKER_COMMAND"
+#
+# The service definitions are root-owned, under /etc/php-base/s6/. Only s6's
+# state (the scan directory and each service's supervise/ and event/) lives
+# under /tmp/php-base/s6, recreated at every start.
+#
+# Exit status (spec §7.4): docker stop sends SIGTERM, tini forwards it, and
+# s6-svscan brings every service down with its down-signal, then execs
+# .s6-svscan/finish, which exits 0 — unless a service died on its own
+# (fail-fast), in which case it exits 1 so the restart policy can act.
+# =============================================================================
+set -eu
+
+SCAN=/tmp/php-base/s6/scan
+
+[ $# -eq 0 ] || { echo "php-base-web takes no arguments (got: $*)" >&2; exit 2; }
+[ -d "$SCAN/.s6-svscan" ] \
+    || { echo "php-base-web: ${SCAN} is missing; it is rendered by docker-entrypoint.sh, which must stay the entrypoint" >&2; exit 1; }
+
+exec s6-svscan "$SCAN"

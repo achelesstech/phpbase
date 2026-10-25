@@ -7,8 +7,9 @@
 #   2. PHP ini overrides from env   /tmp/php-base/php/zz-runtime.ini
 #   3. FPM pool overrides from env  /tmp/php-base/fpm/zz-runtime.conf
 #   4. nginx http{} settings        /tmp/php-base/nginx/http.d/10-php-base.conf
-#   5. Application hooks            /docker-entrypoint.d/*.sh
-#   6. Validate (web role only), then exec CMD
+#   5. s6 scan directory (web role) /tmp/php-base/s6/scan
+#   6. Application hooks            /docker-entrypoint.d/*.sh
+#   7. Validate (web role only), then exec CMD
 #
 # Nothing rendered here survives a restart, and nothing outside /tmp is
 # written, so a read-only root filesystem works with a single tmpfs:
@@ -53,11 +54,15 @@ reset_runtime() {
 }
 
 # ── Role ─────────────────────────────────────────────────────────────────────
-# "web" when CMD is the default supervisord (nginx + FPM); "cli" for a worker,
-# scheduler or one-off command. healthcheck.sh picks its probe from this.
+# "web" when CMD is the default php-base-web (nginx + FPM under s6); "cli" for
+# a worker, scheduler or one-off command. healthcheck.sh picks its probe from
+# this. A v1 app image that still overrides the command with supervisord gets
+# one clear line instead of "executable file not found".
 detect_role() {
     case "${1:-}" in
-        supervisord|*/supervisord) ROLE=web ;;
+        php-base-web|*/php-base-web) ROLE=web ;;
+        supervisord|*/supervisord)
+            die "supervisord was removed in php-base v2: use the default CMD (php-base-web), SCHEDULER_COMMAND/WORKER_COMMAND, or a separate container — see docs/migrating-from-v1.md" ;;
         *)                         ROLE=cli ;;
     esac
     printf '%s\n' "$ROLE" > "$RUNTIME/role"
@@ -214,26 +219,37 @@ render_nginx() {
     } > "$out"
 }
 
-# ── Optional supervisord programs ────────────────────────────────────────────
-# supervisord.conf reads these through %(ENV_…)s, so it must see a value even
-# when the feature is off.
-export_supervisor_env() {
-    export SCHEDULER_INTERVAL="${SCHEDULER_INTERVAL:-60}"
+# ── 5. s6 services (web role) ────────────────────────────────────────────────
+# php-base-web runs s6-svscan on $RUNTIME/s6/scan. Each enabled service is a
+# symlink to its root-owned definition in /etc/php-base/s6/, whose supervise/
+# and event/ are in turn symlinks into $RUNTIME/s6/<service>/ — the only
+# writable state s6 has; s6-supervise creates the targets (so they must not
+# exist beforehand). The run scripts read SCHEDULER_COMMAND, SCHEDULER_INTERVAL,
+# WORKER_COMMAND and APP_ROOT from the environment s6 inherits from here.
+enable_service() {
+    mkdir -p "$RUNTIME/s6/$1"
+    ln -s "/etc/php-base/s6/$1" "$RUNTIME/s6/scan/$1"
+}
+render_services() {
+    [ "$ROLE" = web ] || return 0
+    scan="$RUNTIME/s6/scan"
+    mkdir -p "$scan/.s6-svscan"
+    # SIGTERM: the stop order (nginx drains first); finish: the exit status.
+    for hook in SIGTERM finish; do ln -s "/etc/php-base/s6/.s6-svscan/$hook" "$scan/.s6-svscan/$hook"; done
+    for service in php-fpm nginx; do enable_service "$service"; done
     if [ -n "${SCHEDULER_COMMAND:-}" ]; then
-        export PHP_BASE_SCHEDULER_ENABLED=true
-        [ "$ROLE" != web ] || log "scheduler: every ${SCHEDULER_INTERVAL}s: ${SCHEDULER_COMMAND}"
-    else
-        export SCHEDULER_COMMAND=true PHP_BASE_SCHEDULER_ENABLED=false
+        interval="${SCHEDULER_INTERVAL:-60}"
+        case "$interval" in ''|*[!0-9]*|0) die "SCHEDULER_INTERVAL must be a whole number of seconds, got '${interval}'" ;; esac
+        enable_service scheduler
+        log "scheduler: every ${interval}s: ${SCHEDULER_COMMAND}"
     fi
     if [ -n "${WORKER_COMMAND:-}" ]; then
-        export PHP_BASE_WORKER_ENABLED=true
-        [ "$ROLE" != web ] || log "worker: ${WORKER_COMMAND}"
-    else
-        export WORKER_COMMAND=true PHP_BASE_WORKER_ENABLED=false
+        enable_service worker
+        log "worker: ${WORKER_COMMAND}"
     fi
 }
 
-# ── 5. Application hooks ─────────────────────────────────────────────────────
+# ── 6. Application hooks ─────────────────────────────────────────────────────
 # Hooks run at every start, so a hook the runtime user can modify is a
 # persistence channel for a compromised PHP process. Warn (PHP_BASE_STRICT=1:
 # refuse) when one is. COPY hooks without --chown: root-owned, mode 0755.
@@ -258,7 +274,7 @@ run_hooks() {
     done
 }
 
-# ── 6. Validate ──────────────────────────────────────────────────────────────
+# ── 7. Validate ──────────────────────────────────────────────────────────────
 # Seconds-long crash loops with a bad env value are worse than one clear line.
 validate() {
     [ "$ROLE" = web ] || return 0
@@ -279,7 +295,7 @@ log "$(php-base-info --short 2>/dev/null || echo php-base) role=${ROLE}"
 render_php
 render_fpm
 render_nginx
-export_supervisor_env
+render_services
 run_hooks
 validate
 

@@ -1,0 +1,19 @@
+#!/bin/sh
+# =============================================================================
+# s6-svscan's finish — the web container's exit status
+# =============================================================================
+# s6-svscan execs this once every service is down, so its exit status is
+# s6-svscan's, which tini (PID 1) passes on as the container's.
+#
+#   0  the stop was asked for (docker stop → SIGTERM) and everything stopped;
+#   1  nginx or php-fpm died on its own: fail-fast wrote /tmp/php-base/s6/failed
+#      and asked s6-svscan to shut down, so the restart policy takes over
+#      instead of a "running" container answering 502.
+# =============================================================================
+FAILED=/tmp/php-base/s6/failed
+
+if [ -f "$FAILED" ]; then
+    echo "[php-base-web] exiting 1: $(cat "$FAILED")" >&2
+    exit 1
+fi
+exit 0

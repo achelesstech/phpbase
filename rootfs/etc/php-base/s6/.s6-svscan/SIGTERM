@@ -1,0 +1,20 @@
+#!/bin/sh
+# =============================================================================
+# s6-svscan's SIGTERM handler — a docker stop drains nginx before the rest
+# =============================================================================
+# s6-svscan runs this instead of its default (stop everything at once) when
+# tini forwards docker stop's SIGTERM.
+#
+# nginx goes down first and alone: on SIGQUIT it stops accepting connections
+# and finishes the requests in flight, and -wD waits for that (at most the
+# 15 s after which s6-supervise SIGKILLs it, see nginx/timeout-kill). Only
+# then does everything else get its down signal. php-fpm forwards its SIGQUIT
+# to every worker at once, which interrupts a request in progress (PHP's
+# sleep() returns early, blocking reads see EINTR), so it must not happen while
+# nginx still has requests open. The prototype's supervisord stopped in the
+# same order, through priorities.
+# =============================================================================
+SCAN=/tmp/php-base/s6/scan
+
+s6-svc -wD -T 16000 -d "$SCAN/nginx" || true
+exec s6-svscanctl -t "$SCAN"

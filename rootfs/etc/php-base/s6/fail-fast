@@ -1,0 +1,30 @@
+#!/bin/sh
+# =============================================================================
+# fail-fast — the ./finish of nginx and php-fpm: a death nobody asked for
+# takes the whole container down
+# =============================================================================
+# s6-supervise runs ./finish when ./run exits, with
+#   $1  the exit code (256 when killed by a signal)
+#   $2  the signal number (0 otherwise)
+#   $3  the service name
+#
+# During a requested stop (docker stop → SIGTERM → s6-svscan → s6-supervise
+# brings the service down) the service is no longer "wanted up", and this exits
+# quietly: s6-supervise then exits and s6-svscan's finish returns 0.
+#
+# Otherwise the daemon crashed or was killed. Without this, s6 would restart it
+# and the container would stay "running" while every request answered 502
+# (or, for a daemon that cannot start, loop forever). Instead: record why, ask
+# s6-svscan to shut everything down, and exit 125, which tells s6-supervise not
+# to restart the service in the meantime. .s6-svscan/finish turns the record
+# into exit status 1.
+# =============================================================================
+S6=/tmp/php-base/s6
+
+[ "$(s6-svstat -o wantedup . 2>/dev/null)" != false ] || exit 0
+
+if [ "$1" = 256 ]; then why="killed by signal $2"; else why="exited $1"; fi
+echo "[php-base-web] $3 ${why} — stopping the container" >&2
+[ -e "$S6/failed" ] || echo "$3 ${why}" > "$S6/failed"
+s6-svscanctl -t "$S6/scan"
+exit 125

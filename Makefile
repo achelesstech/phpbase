@@ -56,7 +56,9 @@ lint:
 	docker run --rm -v "$(CURDIR):/src:ro" -w /src koalaman/shellcheck:v0.11.0 -S warning -x -s sh \
 		rootfs/usr/local/bin/docker-entrypoint.sh rootfs/usr/local/bin/healthcheck.sh \
 		rootfs/usr/local/bin/php-base-every rootfs/usr/local/bin/php-base-info \
-		rootfs/usr/local/bin/php-base-validate rootfs/usr/local/bin/nginx-validate.sh
+		rootfs/usr/local/bin/php-base-validate rootfs/usr/local/bin/nginx-validate.sh \
+		rootfs/usr/local/bin/php-base-web rootfs/etc/php-base/s6/.s6-svscan/SIGTERM \
+		rootfs/etc/php-base/s6/.s6-svscan/finish rootfs/etc/php-base/s6/fail-fast rootfs/etc/php-base/s6/*/run
 	docker run --rm -v "$(CURDIR):/src:ro" -w /src koalaman/shellcheck:v0.11.0 -S warning -x -s bash \
 		scripts/*.sh scripts/lib/*.sh test/*.sh test/runtime/*.sh test/scripts/*.sh test/frameworks/*.sh
 

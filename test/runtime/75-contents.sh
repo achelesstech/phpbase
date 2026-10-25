@@ -55,3 +55,28 @@ else
 fi
 [[ "$(label "$p.variant")" == runtime ]] && ok "variant label is runtime" \
     || bad "variant label is '$(label "$p.variant")'"
+
+# Process model (spec §7.4): tini is PID 1, everything runs as www-data, and
+# the services log straight to the container's stdout/stderr.
+pid1="$(docker exec "$APP" cat /proc/1/comm)"
+[[ "$pid1" == tini ]] && ok "PID 1 is tini" || bad "PID 1 is '${pid1}'"
+uids="$(docker exec "$APP" sh -c 'grep -h ^Uid: /proc/[0-9]*/status | cut -f2 | sort -u | tr "\n" " "')"
+[[ "$uids" == "1000 " ]] && ok "every process runs as uid 1000" || bad "process uids: ${uids}"
+# shellcheck disable=SC2016  # $p expands inside the container.
+leftovers="$(docker exec "$APP" sh -c 'for p; do if [ -e "$p" ] || [ -L "$p" ]; then echo "$p"; fi; done' sh /usr/bin/python3 /etc/supervisor /usr/bin/supervisord)"
+[[ -z "$leftovers" ]] && ok "no Python and no supervisor tree in the runtime image" || bad "still in the image: $(tr '\n' ' ' <<<"$leftovers")"
+get_path "$APP" '/index.php?log=marker-7f3a' >/dev/null || true
+logged=no; for _ in 1 2 3; do grep -q 'marker-7f3a' <<<"$(docker logs "$APP" 2>&1)" && { logged=yes; break; }; sleep 1; done
+[[ "$logged" == yes ]] && ok "PHP error_log() output reaches docker logs" || bad "error_log() marker not in docker logs"
+
+# Size ceiling: versions.json's max_size_mb for this line (MB = 10^6 bytes).
+max_mb="$(jq -r --arg l "$line" '.php[] | select(.line == $l) | .max_size_mb // ""' "$HERE/../versions.json")"
+size="$(docker image inspect -f '{{.Size}}' "$IMAGE")"
+size_mb="$(awk -v b="$size" 'BEGIN { printf "%.1f", b / 1000000 }')"
+if [[ ! "$max_mb" =~ ^[0-9]+$ ]]; then
+    bad "versions.json has no max_size_mb for line ${line}"
+elif (( size <= max_mb * 1000000 )); then
+    ok "runtime image is ${size_mb} MB (ceiling ${max_mb} MB for ${line})"
+else
+    bad "runtime image is ${size_mb} MB, over the ${max_mb} MB ceiling for ${line}"
+fi
