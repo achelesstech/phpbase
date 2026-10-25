@@ -5,14 +5,16 @@
 
 # internal NAME PATH — fetch PATH from the internal status listener, inside NAME.
 internal() { docker exec "$1" curl -sf "http://127.0.0.1:8081${2}"; }
-# no_status_page TEXT — TEXT is neither the FPM nor the nginx status page.
-no_status_page() { [[ "$1" != *"pool:"* && "$1" != *"Active connections"* ]]; }
+# no_status_page TEXT — TEXT is the app's answer (non-empty: the fixture's
+# front controller serves every path), and neither the FPM nor the nginx
+# status page. An empty TEXT (8080 down, or an error) is a failure.
+no_status_page() { [[ -n "$1" && "$1" != *"pool:"* && "$1" != *"Active connections"* ]]; }
 
 info "status pages: internal listener only"
 for path in /fpm-status /nginx-status; do
     public="$(get_path "$APP" "$path" || true)"
-    no_status_page "$public" && ok "${path} on 8080 is not the status page" \
-        || bad "${path} on 8080 serves the status page"
+    no_status_page "$public" && ok "${path} on 8080 is the app, not the status page" \
+        || bad "${path} on 8080: ${public:-no answer} (want the app's page)"
 done
 fpm_status="$(internal "$APP" /fpm-status || true)"
 [[ "$fpm_status" == *"pool:"* ]] && ok "127.0.0.1:8081/fpm-status is the FPM status page" \
@@ -25,7 +27,7 @@ ping="$(internal "$APP" /fpm-ping || true)"
     || bad "127.0.0.1:8081/fpm-ping: ${ping:-no answer}"
 spoofed="$(from_network_url "http://${APP}:8080/fpm-status" -H 'X-Forwarded-For: 127.0.0.1' || true)"
 no_status_page "$spoofed" && ok "X-Forwarded-For: 127.0.0.1 from the network does not reach the FPM status" \
-    || bad "a forged X-Forwarded-For reaches the FPM status page"
+    || bad "forged X-Forwarded-For: 127.0.0.1 on 8080: ${spoofed:-no answer} (want the app's page)"
 rc=0
 from_network_url "http://${APP}:8081/fpm-ping" -o /dev/null --max-time 5 2>/dev/null || rc=$?
 # curl exit 7: could not connect. Anything else means something answered.
@@ -45,3 +47,11 @@ if wait_health "$FAST" healthy 30 && (( SECONDS - started <= 15 )); then
 else
     bad "a new container was not healthy within 15 s ($((SECONDS - started)) s)"
 fi
+# fpm mode probes the ping, then HEALTHCHECK_URL: both together must fit in
+# the 5 s timeout, or Docker reports a timeout instead of the probe's reason.
+# So a hanging HEALTHCHECK_URL gets at most ~2 s (half the budget), not 4.
+t0=$(date +%s%N); rc=0
+docker exec -e 'HEALTHCHECK_URL=http://127.0.0.1:8080/index.php?sleep=10' "$FAST" healthcheck.sh >/dev/null 2>&1 || rc=$?
+ms=$((($(date +%s%N) - t0) / 1000000))
+(( rc == 1 && ms < 3000 )) && ok "a hanging HEALTHCHECK_URL fails in ${ms} ms (each fpm-mode probe fits half the 5 s timeout)" \
+    || bad "healthcheck with a hanging HEALTHCHECK_URL: exit ${rc} after ${ms} ms (want 1, under 3000 ms)"

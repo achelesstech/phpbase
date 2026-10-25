@@ -35,16 +35,18 @@ fi
 
 fail() { echo "healthcheck(${MODE}): $*" >&2; exit 1; }
 
-probe_url() {
-    curl -fsS -o /dev/null --max-time 4 "$1" 2>/dev/null || fail "${1} did not return 2xx/3xx"
+# The Dockerfile's HEALTHCHECK --timeout is 5s: one probe gets 4 s, two in a
+# row (fpm mode with HEALTHCHECK_URL) get 2 s each.
+probe_url() {   # probe_url URL [max seconds]
+    curl -fsS -o /dev/null --max-time "${2:-4}" "$1" 2>/dev/null || fail "${1} did not return 2xx/3xx"
 }
 
 case "$MODE" in
     fpm)
         url="http://127.0.0.1:${HEALTHCHECK_PORT:-8081}${HEALTHCHECK_PATH:-/fpm-ping}"
-        response="$(curl -fsS --max-time 4 "$url" 2>/dev/null)" || fail "no answer from ${url}"
+        response="$(curl -fsS --max-time 2 "$url" 2>/dev/null)" || fail "no answer from ${url}"
         case "$response" in *pong*) ;; *) fail "unexpected answer from ${url}: ${response}" ;; esac
-        [ -z "${HEALTHCHECK_URL:-}" ] || probe_url "$HEALTHCHECK_URL"
+        [ -z "${HEALTHCHECK_URL:-}" ] || probe_url "$HEALTHCHECK_URL" 2
         ;;
     http)
         probe_url "${HEALTHCHECK_URL:?HEALTHCHECK_URL is required for HEALTHCHECK_MODE=http}"
