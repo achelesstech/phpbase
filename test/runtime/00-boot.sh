@@ -6,7 +6,7 @@
 info "boot (default role: nginx + php-fpm)"
 APP="$(start app \
     -e PHP_MEMORY_LIMIT=333M \
-    -e FPM_MAX_CHILDREN=7 \
+    -e FPM_MAX_CHILDREN=5 \
     -e 'PHP_SESSION_SAVE_PATH=tcp://redis:6379?auth=s3cret&database=2' \
     -e $'PHP_INI_EXTRA=pcre.backtrack_limit = 5000000\nmbstring.language = Neutral' \
     "$FIXTURE_TAG")"

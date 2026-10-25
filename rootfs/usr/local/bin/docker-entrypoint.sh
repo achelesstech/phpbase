@@ -5,7 +5,7 @@
 #   1. Reset the runtime dir        /tmp/php-base           (wiped every start)
 #      and recreate $HOME           /tmp/php-base/home      (/home/www-data links here)
 #   2. PHP ini overrides from env   /tmp/php-base/php/zz-runtime.ini
-#   3. FPM pool overrides from env  /tmp/php-base/fpm/zz-runtime.conf
+#   3. FPM pool size + env          /tmp/php-base/fpm/zz-runtime.conf
 #   4. nginx http{} settings        /tmp/php-base/nginx/http.d/10-php-base.conf
 #   5. s6 scan directory (web role) /tmp/php-base/s6/scan
 #   6. Application hooks            /docker-entrypoint.d/*.sh
@@ -137,21 +137,117 @@ render_php() {
 }
 
 # ── 3. PHP-FPM pool overrides ────────────────────────────────────────────────
+# size_mib SIZE [UNIT] — a size with a k/m/g suffix (64M, 262144k) in whole
+# MiB. A bare number is in UNIT: bytes by default, or M. Fails on anything
+# else, including a leading zero (08 is an octal error in shell arithmetic).
+size_mib() {
+    mul=1; div=1
+    case "$1" in
+        *[kK]) value="${1%?}"; div=1024 ;;
+        *[mM]) value="${1%?}" ;;
+        *[gG]) value="${1%?}"; mul=1024 ;;
+        *)     value="$1"; [ "${2:-}" = M ] || div=1048576 ;;
+    esac
+    case "$value" in ''|*[!0-9]*|0?*) return 1 ;; esac
+    echo $(( value * mul / div ))
+}
+
+# fpm_auto_children — print pm.max_children for FPM_MAX_CHILDREN=auto, and log
+# the inputs. Workers get what the memory limit leaves after a reserve:
+#   clamp(floor((L − R) / W), 2, 64)
+#   L  the cgroup memory limit (v2 memory.max, else v1 memory.limit_in_bytes)
+#   W  FPM_WORKER_MEMORY (64M)
+#   R  opcache.memory_consumption + 64M + the /tmp size when /tmp is a tmpfs:
+#      uploads and ImageMagick's cache live there, and on a tmpfs they are RAM
+#      charged to the same limit.
+# No limit (`max`, or ≥ 2^60 bytes, as cgroup v1 reports "unlimited") → 12.
+fpm_auto_children() {
+    limit=""
+    if [ -r /sys/fs/cgroup/memory.max ]; then
+        limit="$(cat /sys/fs/cgroup/memory.max)"
+    elif [ -r /sys/fs/cgroup/memory/memory.limit_in_bytes ]; then
+        limit="$(cat /sys/fs/cgroup/memory/memory.limit_in_bytes)"
+    fi
+    # Anything over 19 digits would overflow shell arithmetic; it is unlimited anyway.
+    case "$limit" in ''|*[!0-9]*|????????????????????*) limit="" ;; esac
+    [ -z "$limit" ] || [ $(( limit / 1048576 )) -lt 1099511627776 ] || limit=""
+    if [ -z "$limit" ]; then
+        log "fpm: max_children=12 (no memory limit)"
+        echo 12
+        return
+    fi
+    limit_mib=$(( limit / 1048576 ))
+
+    worker_mib="$(size_mib "${FPM_WORKER_MEMORY:-64M}")" && [ "$worker_mib" -gt 0 ] \
+        || die "FPM_WORKER_MEMORY must be a size of at least 1M (e.g. 64M), got '${FPM_WORKER_MEMORY:-}'"
+
+    # The EFFECTIVE value, so PHP_OPCACHE_MEMORY (render_php) counts. ini_get
+    # returns it as written: 256 (MiB, as PHP reads a bare number) or 256M.
+    opcache="$(php -r 'echo ini_get("opcache.memory_consumption");' 2>/dev/null || true)"
+    opcache_mib="$(size_mib "$opcache" M)" \
+        || die "cannot read opcache.memory_consumption as a size (got '${opcache}')"
+
+    # The last mount on /tmp wins. A tmpfs mounted without size= shows no size
+    # in /proc/mounts (the kernel default, half the host RAM): ask df instead.
+    tmp_mib=0
+    tmp_mount="$(awk '$2 == "/tmp" { m = $3 " " $4 } END { print m }' /proc/mounts)"
+    case "$tmp_mount" in
+        "tmpfs "*)
+            tmp_size="$(printf '%s\n' "${tmp_mount#tmpfs }" | tr ',' '\n' | sed -n 's/^size=//p')"
+            if ! tmp_mib="$(size_mib "$tmp_size")"; then
+                tmp_kib="$(df -k /tmp | awk 'NR == 2 { print $2 }')"
+                case "$tmp_kib" in ''|*[!0-9]*) die "cannot read the size of the /tmp tmpfs (df gave '${tmp_kib}')" ;; esac
+                tmp_mib=$(( tmp_kib / 1024 ))
+            fi
+            ;;
+    esac
+
+    reserve_mib=$(( opcache_mib + 64 + tmp_mib ))
+    children=$(( (limit_mib - reserve_mib) / worker_mib ))
+    [ "$children" -ge 2 ] || children=2
+    [ "$children" -le 64 ] || children=64
+    log "fpm: max_children=${children} (limit ${limit_mib}M, worker ${worker_mib}M, reserve ${reserve_mib}M)"
+    echo "$children"
+}
+
 # Pool sizing is the most deployment-specific setting in the image, so it is
-# runtime env. Re-opening [www] appends to the pool from www.conf; later wins.
+# runtime env. Re-opening [www] appends to the pool from www.conf; later wins,
+# so the explicit FPM_* values, rendered after the derived ones, override them.
 render_fpm() {
     out="$RUNTIME/fpm/zz-runtime.conf"
-    printf '[www]\n' > "$out"
+
+    children="${FPM_MAX_CHILDREN:-auto}"
+    case "$children" in
+        auto) children="$(fpm_auto_children)" ;;
+        ''|*[!0-9]*|0*) die "FPM_MAX_CHILDREN must be a whole number of at least 1, or auto, got '${children}'" ;;
+    esac
+    # Spare servers scale with the pool, never past it (an explicit
+    # FPM_MAX_CHILDREN=1 must still give a config php-fpm accepts).
+    start=$(( (children + 3) / 4 )); [ "$start" -ge 2 ] || start=2
+    min_spare=$(( children / 4 ));   [ "$min_spare" -ge 1 ] || min_spare=1
+    max_spare=$(( (children + 1) / 2 )); [ "$max_spare" -ge 2 ] || max_spare=2
+    [ "$start" -le "$children" ] || start="$children"
+    [ "$max_spare" -le "$children" ] || max_spare="$children"
+
+    {
+        printf '[www]\n'
+        printf 'pm.max_children = %s\n' "$children"
+        printf 'pm.start_servers = %s\n' "$start"
+        printf 'pm.min_spare_servers = %s\n' "$min_spare"
+        printf 'pm.max_spare_servers = %s\n' "$max_spare"
+        printf 'request_terminate_timeout = %s\n' "${FPM_REQUEST_TERMINATE_TIMEOUT:-300s}"
+    } > "$out"
+
     n=0
+    [ "${FPM_MAX_CHILDREN:-auto}" = auto ] || n=$((n + 1))
+    [ -z "${FPM_REQUEST_TERMINATE_TIMEOUT:-}" ] || n=$((n + 1))
     for pair in \
         FPM_PM:pm \
-        FPM_MAX_CHILDREN:pm.max_children \
         FPM_START_SERVERS:pm.start_servers \
         FPM_MIN_SPARE_SERVERS:pm.min_spare_servers \
         FPM_MAX_SPARE_SERVERS:pm.max_spare_servers \
         FPM_MAX_REQUESTS:pm.max_requests \
         FPM_PROCESS_IDLE_TIMEOUT:pm.process_idle_timeout \
-        FPM_REQUEST_TERMINATE_TIMEOUT:request_terminate_timeout \
         FPM_SLOWLOG_TIMEOUT:request_slowlog_timeout
     do
         name="${pair%%:*}"
@@ -161,6 +257,14 @@ render_fpm() {
         printf '%s = %s\n' "$key" "$value" >> "$out"
         n=$((n + 1))
     done
+
+    # Web requests only: the CLI (artisan, drush, cron) does not read the pool.
+    if [ -n "${PHP_DISABLE_FUNCTIONS:-}" ]; then
+        printf '%s' "$PHP_DISABLE_FUNCTIONS" | grep -qE '^[A-Za-z0-9_, ]+$' \
+            || die "PHP_DISABLE_FUNCTIONS must be a comma-separated list of function names, got '${PHP_DISABLE_FUNCTIONS}'"
+        printf 'php_admin_value[disable_functions] = %s\n' "$PHP_DISABLE_FUNCTIONS" >> "$out"
+        n=$((n + 1))
+    fi
 
     if [ "${FPM_ACCESS_LOG:-0}" = 1 ]; then
         # php-fpm closes stdout at startup; fd 2 is the one that works.

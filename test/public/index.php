@@ -7,6 +7,9 @@ if (isset($_GET['sleep'])) {           // slowlog check
     usleep((int) $_GET['sleep'] * 1000000);
     exit("slept\n");
 }
+if (isset($_GET['exec'])) {            // PHP_DISABLE_FUNCTIONS check
+    exit('exec:' . (function_exists('exec') ? 'enabled' : 'disabled') . "\n");
+}
 if (isset($_GET['log'])) {             // logs check: error_log() must reach docker logs
     error_log((string) $_GET['log']);
     exit("logged\n");

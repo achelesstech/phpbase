@@ -7,6 +7,6 @@ info "runtime configuration"
 [[ "$(field session_save_path)" == 'tcp://redis:6379?auth=s3cret&database=2' ]] \
     && ok "an ini value with ?, & and = survives rendering (quoted)" || bad "session.save_path=$(field session_save_path)"
 [[ "$(field pcre_backtrack_limit)" == "5000000" ]] && ok "PHP_INI_EXTRA applied" || bad "PHP_INI_EXTRA not applied"
-check "FPM pool override rendered into /tmp/php-base" docker exec "$APP" grep -q 'pm.max_children = 7' /tmp/php-base/fpm/zz-runtime.conf
+check "explicit FPM_MAX_CHILDREN=5 renders pm.max_children = 5" docker exec "$APP" grep -qx 'pm.max_children = 5' /tmp/php-base/fpm/zz-runtime.conf
 grep -q '^hook_ran:yes$' <<<"$body" && ok "/docker-entrypoint.d hook ran despite having no exec bit" || bad "hook did not run"
 if grep -q <<<"$(docker logs "$APP" 2>&1)" 'WARNING: .*writable'; then bad "root-owned hook triggered a writable-hook warning"; else ok "root-owned hook: no warning"; fi

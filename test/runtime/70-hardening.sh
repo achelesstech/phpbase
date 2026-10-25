@@ -18,6 +18,11 @@ check "nginx writes no log files into the writable layer" docker exec "$APP" sh 
 if grep -qE <<<"$(docker logs "$APP" 2>&1)" 'could not open error log|\[emerg\]|\[alert\]'; then bad "nginx alert/emerg at startup"; else ok "no nginx alerts at startup"; fi
 grep -q <<<"$(docker logs "$APP" 2>&1)" 'GET / ' && ok "nginx access log reaches stdout" || bad "no access log on stdout"
 
+# PHP-FPM's socket is the only one: nothing else under /tmp accepts connections.
+tmp_sockets="$(docker exec "$APP" find /tmp -type s 2>&1 || true)"
+[[ "$tmp_sockets" == "/tmp/php-base/php-fpm.sock" ]] \
+    && ok "the only socket under /tmp is /tmp/php-base/php-fpm.sock" || bad "sockets under /tmp: '${tmp_sockets}'"
+
 # A v1 app that still overrides the command with supervisord must fail at
 # start with a message naming what to use instead (review focus 1). The
 # timeout is for the failure case: a supervisord that still starts never exits.
