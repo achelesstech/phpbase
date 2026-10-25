@@ -108,7 +108,7 @@ docker compose -f compose.prod.yml exec app wp core install --url="https://www.e
 
 | Service | Role | `mem_limit` |
 |---|---|---|
-| `app` | web: nginx + PHP-FPM; healthy when `/fpm-ping` and `/wp-login.php` answer | 1g |
+| `app` | web: nginx + PHP-FPM; healthy when `/fpm-ping` on the internal `127.0.0.1:8081` answers through PHP-FPM and `HEALTHCHECK_URL` (`/wp-login.php`) returns 2xx/3xx | 1g |
 | `scheduler` | `php-base-every 60 wp cron event run --due-now`; healthy while runs keep succeeding | 512m |
 | `migrate` | `wp core update-db`, profile `ops`, after a WordPress upgrade | 512m |
 | `db` | MariaDB 11.4 | — |

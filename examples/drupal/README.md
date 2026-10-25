@@ -110,7 +110,7 @@ on.
 
 | Service | Role | `mem_limit` |
 |---|---|---|
-| `app` | web: nginx + PHP-FPM; healthy when `/fpm-ping` answers through PHP-FPM | 1g |
+| `app` | web: nginx + PHP-FPM; healthy when `/fpm-ping` on the internal `127.0.0.1:8081` answers through PHP-FPM (plus `HEALTHCHECK_URL`, if you set one) | 1g |
 | `scheduler` | `php-base-every 60 vendor/bin/drush cron`; healthy while runs keep succeeding | 512m |
 | `migrate` | `drush updatedb -y`, profile `ops`, run by hand | 512m |
 | `db` | PostgreSQL 18 | — |

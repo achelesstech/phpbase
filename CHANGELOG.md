@@ -1,82 +1,155 @@
 # Changelog
 
-## v2 (proposal): weekly multi-line builds for Laravel, Drupal, Moodle and WordPress
+## v2: rebuilt within hours, a smaller and harder runtime, Traefik-first defaults
 
-See PROPOSAL.md for the reasoning and VERIFICATION.md for the test results.
+The image is still `docker.io/achelesstech/php-base`, but app images built on
+v1 need changes before they work. Every change and what to do about it is in
+[`docs/migrating-from-v1.md`](docs/migrating-from-v1.md).
+
+### Breaking changes
+
+- **supervisord is gone.** The default CMD is `php-base-web`: s6 supervises
+  nginx and PHP-FPM. `/etc/supervisor` and Python are gone. A command that
+  still runs `supervisord` exits at start with a message pointing at the
+  migration guide. Extra programs become separate containers, or
+  `WORKER_COMMAND` / `SCHEDULER_COMMAND`.
+- **PHP-FPM listens on `/tmp/php-base/php-fpm.sock`**, mode 0660, and
+  nothing listens on 9000. Own vhosts use `fastcgi_pass php_fpm;` or include
+  `/etc/nginx/php-base/fastcgi-php.conf`.
+- **`/fpm-ping`, `/fpm-status` and `/nginx-status` are only on
+  `127.0.0.1:8081`.** A vhost defines no status paths; delete v1's own
+  `location = /fpm-ping` blocks.
+  The healthcheck's default port for the `fpm` mode is 8081.
+- **Composer, git, Info-ZIP unzip (busybox's stays), patch, openssh-client, PHP sources and headers,
+  `phpize`, PEAR/PECL and the `docker-php-ext-*` helpers ship only in
+  `-dev`.** `composer install` moves to a `-dev` build stage.
+- **No `php.ini-production` or `php.ini-development`.** The runtime is a
+  clean Alpine with PHP's runtime files copied in, so the official image's
+  `mv "$PHP_INI_DIR/php.ini-production" "$PHP_INI_DIR/php.ini"` fails the
+  build. `zz-base.ini` already carries the production values.
+- **`$HOME` (`/home/www-data`) is a symlink to `/tmp/php-base/home`**,
+  recreated empty at every start. It doesn't exist during `docker build`.
+- **Runtime config moved to `/tmp/php-base/`** and is wiped at every start.
+  `/etc/php-runtime.d/` and `php-fpm.d/zz-runtime.conf` are gone;
+  `/etc/php-base-release` is now `/etc/php-base/release`.
+- **New tags.** `X.Y`, `X.Y.Z`, `X.Y.Z-YYYYMMDD` (`.N` for a second build
+  that day), `latest`, a `-dev` twin of each, and `8.6-rc` / `8.6-rc-dev`
+  for the canary. v1's `X.Y-<run number>` tags are not continued, and there
+  are no `X.Y-alpineA.B` tags: a tag tied to one Alpine release stops
+  getting PHP updates.
+- **Behaviour you will notice**, each with a variable to restore it:
+  - the nginx access log is off (`NGINX_ACCESS_LOG=main`), and so is the FPM
+    access log (`FPM_ACCESS_LOG=1`);
+  - nginx no longer compresses dynamic responses (`NGINX_GZIP=1`);
+  - the PHP-FPM pool is sized from the memory limit (`FPM_MAX_CHILDREN=auto`,
+    7 workers at 1g with a 256 MB `/tmp` tmpfs; v1 had a fixed 12);
+  - `client_max_body_size` follows `post_max_size` instead of a fixed 100m.
+- **Worker and scheduler `pgrep` healthchecks should go.** The image's check
+  is role-aware: `fpm` for the web role, `heartbeat` for `php-base-every`,
+  `none` for any other command.
 
 ### Security
 
-- **PHP2Shell (CVE-2026-109618/109619).** The pinned `alpine3.21` upstream tag
-  stopped receiving PHP releases in Nov 2025, so `:8.4` was still on PHP 8.4.15.
-  The build now resolves the floating `php:<line>-fpm-alpine` to an exact
-  digest on every run (`scripts/resolve-matrix.sh`). It warns when upstream is
-  stale or lags php.net.
-- **OS packages are upgraded weekly** (`apk upgrade` on a cache-busted layer).
-  The previous image had 46 fixable HIGH/CRITICAL findings (openssl, curl,
-  musl, libxml2, …); the new one has 0.
-- `session.upload_progress.enabled = Off`, per the PHP advisory of 2026-10-23.
-- Production engine defaults that had been missing (the official image ships
-  no php.ini): `zend.assertions=-1`, `zend.exception_ignore_args=On`,
+- **PHP2Shell (CVE-2026-109618/109619).** v1 pinned an `alpine3.21` upstream
+  tag that stopped receiving PHP releases in November 2025, so `:8.4` was
+  still on PHP 8.4.15. The build now resolves the floating
+  `php:<line>-fpm-alpine` to a digest on every run, and fails a line whose
+  PHP is behind a php.net release more than 3 days old.
+- **Rebuilt within about 6 hours** of a new PHP image, a new `alpine:<minor>`
+  digest, or a pending Alpine package upgrade in the published image
+  (`watch-upstream.yml`), and weekly regardless. Every build runs
+  `apk upgrade` on a cache-busted layer.
+- **A clean Alpine runtime.** The runtime has no compiler inputs, no PHP
+  sources, no PEAR, no Composer, no Python, no `php-cgi` or `phpdbg`, and no
+  setuid or setgid file. The build fails if one appears.
+- **PHP-FPM on a Unix socket only.** v1's TCP listener was already
+  loopback-only; v2 has no FastCGI port at all, so none can be
+  misconfigured or published (a FastCGI client can set `PHP_VALUE`).
+- **Status pages on a loopback-only listener.** v1's `allow 127.0.0.1` on
+  the public port could be passed by any container sending
+  `X-Forwarded-For: 127.0.0.1`.
+- **An ImageMagick policy:** an allowlist of raster formats, no delegates,
+  and a memory cap per operation.
+- **Hook checks.** A hook that isn't root-owned, or is writable by group or
+  others, logs a warning; `PHP_BASE_STRICT=1` refuses to start. The check
+  looks at ownership and mode, so a `www-data`-owned 0555 hook is caught.
+- Optional `PHP_DISABLE_FUNCTIONS`, applied to the FPM pool only.
+- Tested under `--read-only`, a `noexec` `/tmp` tmpfs, `--cap-drop ALL`,
+  `no-new-privileges` and a PID limit
+  ([`docs/security.md`](docs/security.md)).
+- `session.upload_progress.enabled = Off`, per the PHP advisory of
+  2026-10-23, and production engine defaults the official image lacks:
+  `zend.assertions=-1`, `zend.exception_ignore_args=On`,
   `request_order=GP`, `output_buffering=4096`.
-- Config, presets, hooks and `/usr/local/bin` are root-owned. Runtime state
-  lives only in `/tmp/php-base` and is wiped at every start. `read_only: true`
-  works.
 
-### Lines and variants
+### Image
 
 - PHP 8.2, 8.3, 8.4 and 8.5, plus an 8.6 release-candidate canary, all built
-  from `versions.json`.
-- A `:X.Y-dev` variant with Xdebug (off until `XDEBUG_MODE`), PCOV and git.
-- Tags: `X.Y`, `X.Y.Z`, `X.Y-alpineA.B`, `X.Y.Z-YYYYMMDD` and `latest`, each
-  with a `-dev` variant.
+  from `versions.json`, on native amd64 and arm64.
+- A `-dev` variant: Composer 2, git, Xdebug and PCOV (both off), PHP sources
+  and `phpize`, so an app can compile its own extension.
+- Extensions added: gmp, sockets, igbinary, memcached and uploadprogress.
+  phpredis supports igbinary, zstd and lz4. ImageMagick has its HEIC, WebP
+  and JPEG coders. PECL extensions are built from pinned release tarballs
+  (igbinary 3.2.17RC1, the only release that builds on PHP 8.5).
+- `php-base-every`: an aligned, non-overlapping periodic runner with a
+  heartbeat, the container-native cron.
+- `php-base-info [--short|--json]`, and `php-base-validate` to test the nginx
+  and FPM config at build time without leaving root-owned files behind.
+- nginx presets for Laravel, Drupal, WordPress and Moodle (`public/` and
+  legacy layouts), shared snippets, and a `server.d/` extension point.
+- **Traefik-friendly nginx:** `keepalive_timeout 120s` (longer than
+  Traefik's 90s backend idle timeout), `keepalive_requests 10000`,
+  `gzip_static`, `open_file_cache`, `SERVER_PORT` from `X-Forwarded-Port`,
+  `NGINX_FASTCGI_READ_TIMEOUT`, and two workers by default.
+- `HEALTHCHECK --start-interval=2s`, so Traefik routes a new container within
+  seconds (Docker 25+).
+- Labels name the Alpine base and the upstream PHP image by digest.
 
 ### Fixes
 
-- `/home/www-data` was left owned by the deleted uid 82. This is the real cause
-  of the npm EACCES that both Laravel apps worked around.
+- `/home/www-data` was left owned by the deleted uid 82: the real cause of
+  the npm EACCES both Laravel apps worked around.
 - `FPM_SLOWLOG_TIMEOUT` made php-fpm refuse to start, because no `slowlog`
   path was set.
 - Env-rendered ini values containing `?`, `&` or `=` broke the ini parser,
-  which truncated a Redis `session.save_path` and dropped every later override.
+  which cut a Redis `session.save_path` short and dropped every later
+  override.
 - Entrypoint logging moved to stderr. Before, CLI output piped from
   `docker run …` started with `[entrypoint]` lines.
-- The nginx request-body limit now follows PHP's effective `post_max_size`.
-- Behind Cloudflare, the visitor IP is used instead of the edge IP (committed
-  Cloudflare ranges).
+- Behind Cloudflare, nginx now records the visitor's IP instead of
+  Cloudflare's edge address (the Cloudflare ranges are committed and trusted
+  by default).
 - File modes are set explicitly instead of inheriting the build host's umask.
-
-### Build
-
-- PECL extensions are built from release tarballs with `docker-php-ext-install`.
-  The PHP 8.6 image ships no `pecl`.
-- igbinary 3.2.17RC1, the only release that compiles on PHP 8.5.
-- Added: gmp, sockets, igbinary, memcached and uploadprogress; phpredis now
-  supports igbinary, zstd and lz4; ImageMagick HEIC/WebP/JPEG coders.
-- Composer 2.8 → 2.x, latest (`composer/composer:2-bin`).
-- Runtime libraries are computed with `scanelf`, and the build fails on any
-  extension load warning.
-
-### Features
-
-- nginx presets for Laravel, Drupal, WordPress and Moodle (public/ and legacy
-  layouts), plus shared snippets and a `server.d/` extension point.
-- `php-base-every`: an aligned, non-overlapping periodic runner with a
-  heartbeat. `SCHEDULER_COMMAND` / `WORKER_COMMAND` run jobs inside the web
-  container.
-- A role-aware healthcheck: fpm, heartbeat, http, tcp or none.
-- `php-base-info [--json]` reports what a container runs, and
-  `php-base-validate` checks the nginx and FPM config at build time.
 
 ### CI
 
-- Native arm64 runners (no QEMU). Images are pushed by digest, tested from
-  that digest, then tagged. Publishing is per PHP line.
-- Framework smoke tests do real installs of Laravel, Drupal, WordPress and
-  Moodle on every line.
+- Images are pushed by digest, pulled back and tested from that digest, then
+  tagged. Publishing is per PHP line, so one failing line never blocks the
+  others.
+- Every build runs the runtime suite under the hardened flags, the `-dev`
+  suite, a size ceiling per line, real Laravel, Drupal, WordPress and Moodle
+  installs, and Trivy.
 - cosign keyless signatures, an SBOM and provenance (`mode=max`). Actions are
   pinned by SHA. A failing scheduled run opens a GitHub issue.
-- Docker Hub login on every job that has secrets, to avoid pull rate limits.
-- Optional daily `watch-upstream.yml`.
+- `lint.yml` runs `scripts/lint.sh` (also `make lint`) on every push and pull
+  request: hadolint, ShellCheck, actionlint, `docker compose config` for every
+  example, the Traefik config check, the link check and the
+  `test/scripts/*.test.sh` unit tests.
+- Setup, the watcher and Renovate: [`docs/publishing.md`](docs/publishing.md).
+
+### Examples and docs
+
+- `examples/` holds the Laravel 13, Drupal 11, WordPress and Moodle 5.3 app
+  templates, the Traefik edge proxy (two resolvers: `cloudflare` DNS-01 and
+  `letsencrypt` HTTP-01, cert-expiry checks, an explicit 90s backend idle
+  timeout, a read-only Docker socket proxy) and Portainer
+  ([`examples/README.md`](examples/README.md)).
+- New docs: [`docs/image.md`](docs/image.md),
+  [`docs/security.md`](docs/security.md),
+  [`docs/publishing.md`](docs/publishing.md),
+  [`docs/migrating-from-v1.md`](docs/migrating-from-v1.md), and a rewritten
+  [`docs/reverse-proxy.md`](docs/reverse-proxy.md).
 
 ## Registry moved to Docker Hub; CI lint and action versions fixed
 

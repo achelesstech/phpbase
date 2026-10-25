@@ -9,12 +9,14 @@ copy-to-start examples are in [`examples/`](../examples/).
 |---|---|
 | [`image.md`](image.md) | contents, the runtime contract, roles, presets, the healthcheck, every environment variable, tuning |
 | [`security.md`](security.md) | threat model, the hardened run flags, what the tests prove, the ImageMagick policy and how to ship your own |
+| [`migrating-from-v1.md`](migrating-from-v1.md) | every breaking change from v1 and what to do about it, and the steps for FarmBook and HQ |
 
 ## Running it
 
 | Document | What it covers |
 |---|---|
-| [`reverse-proxy.md`](reverse-proxy.md) | running behind Traefik and Cloudflare: the trusted-IP chain and the Cloudflare behaviours that break PHP apps |
+| [`reverse-proxy.md`](reverse-proxy.md) | running behind Traefik and Cloudflare: the trusted-IP chain, keep-alive and timeouts, the `/tmp` tmpfs, which certificate resolver, and the Cloudflare behaviours that break PHP apps |
+| [`publishing.md`](publishing.md) | how the image is built and published: Docker Hub setup, the secrets, the watcher, Renovate, verifying a signature |
 | [`docker-hub.md`](docker-hub.md) | the text for the Docker Hub page |
 
 ## Traefik

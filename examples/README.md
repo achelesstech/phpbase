@@ -1,159 +1,107 @@
-# Application templates
+# Examples
 
-Each directory is a **complete set of files to copy into a real repository**.
-They are not built from here.
+Starting points to copy into your own repository. Nothing here is built or
+deployed from this repository. Each app example's own `build-app.yml` builds,
+boots and scans it once it lives in your repository.
 
-| Template | Base | Docroot | Kind |
-|---|---|---|---|
-| `laravel` | `php-base:8.4` | `public/` | your code — copy into the app repo |
-| `drupal` | `php-base:8.4` | `web/` | your code — copy into the app repo |
-| `moodle` | `php-base:8.4` | detected | upstream tarball — deployment repo |
-| `wordpress` | `php-base:8.4` | install root | upstream tarball — deployment repo |
+| Example | What it is | Base, stack |
+|---|---|---|
+| [`laravel/`](laravel/) | a Laravel 13 app: copy it into the app repository, next to your code | `php-base:8.4`; `laravel.conf` preset; app, queue, scheduler; PostgreSQL 18 |
+| [`drupal/`](drupal/) | a Drupal 11 site (`drupal/recommended-project`): copy it into the site repository | `php-base:8.4`; `drupal.conf` preset; app, scheduler (`drush cron`); PostgreSQL 18 |
+| [`wordpress/`](wordpress/) | a deployment repository: core is downloaded at build; your themes and plugins live here | `php-base:8.4`; `wordpress.conf` preset; app, scheduler (WP-Cron); MariaDB 11.4 |
+| [`moodle/`](moodle/) | a deployment repository for Moodle 5.3 LTS (one line switches to 5.2): the release is downloaded at build | `php-base:8.4`; `moodle.conf` preset; app, scheduler (cron); PostgreSQL 18 |
+| [`traefik/`](traefik/) | the edge proxy for the host: TLS, both certificate resolvers, middlewares, a read-only Docker socket proxy | once per host; every app above sits behind it |
+| [`portainer/`](portainer/) | Portainer CE behind Traefik, with no published ports | once per host, optional |
 
-The distinction matters. For Laravel and Drupal the Dockerfile lives next to
-your code. For Moodle and WordPress the "app" is someone else's tarball, so the
-repo is a *deployment* repo: one per site, holding only the Dockerfile, vhost,
-compose and any themes/plugins you actually own.
+Each directory's README is the full guide. This page covers what they have in
+common.
 
-## Copying one in
+## Copying an app example
 
 ```bash
 APP=~/code/my-laravel-app
-cp -r examples/laravel/. "$APP/"
+cp -r examples/laravel/. "$APP/"        # the trailing /. copies .env.example, .github/, …
 cd "$APP"
-cp .env.example .env      # then fill it in
-docker compose up -d --build
+cp .env.example .env                    # fill it in; never commit .env
 ```
 
-Then pin the base by digest:
+Then:
 
-```bash
-docker buildx imagetools inspect docker.io/achelesstech/php-base:8.4 \
-  --format '{{.Manifest.Digest}}'
-```
+1. **Pin both base images by digest.** The Dockerfile starts with
+   `PHP_BASE_IMAGE` (the runtime, for production) and `PHP_BASE_DEV_IMAGE`
+   (`-dev`, for the Composer stage and local development). Read the digests
+   with
 
-```dockerfile
-ARG BASE_IMAGE=docker.io/achelesstech/php-base:8.4@sha256:<that digest>
-```
+   ```bash
+   docker buildx imagetools inspect docker.io/achelesstech/php-base:8.4     --format '{{.Manifest.Digest}}'
+   docker buildx imagetools inspect docker.io/achelesstech/php-base:8.4-dev --format '{{.Manifest.Digest}}'
+   ```
 
-`:8.4` alone means the app image changes silently whenever the base is rebuilt.
-`renovate.json` keeps the digest current.
+   `:8.4` alone changes your image whenever the base is rebuilt, and last
+   week's build can't be reproduced. The example's `renovate.json` keeps both
+   digests current.
+2. **Run it locally:** `docker compose up --build` (the `dev` target, on
+   http://localhost:8080).
+3. **Name the app image** and keep its repository **private**: it contains
+   your code or configuration. The name is one variable at the top of
+   `build-app.yml` and of `compose.prod.yml`; change both together. Docker
+   Hub's free plan has one private repository, and GHCR is the documented
+   alternative. Before the first push, set the `DOCKERHUB_USERNAME` and
+   `DOCKERHUB_TOKEN` secrets on the app repository.
+4. **Deploy behind Traefik** with `compose.prod.yml`, after the Traefik
+   example is running on the host. Set `TRAEFIK_CERT_RESOLVER` in `.env` by
+   where the domain's DNS is hosted: `cloudflare` for Cloudflare DNS,
+   `letsencrypt` for anywhere else
+   ([`../docs/reverse-proxy.md`](../docs/reverse-proxy.md#certificates-which-resolver)).
 
-## Registry
+The Traefik and Portainer examples are host-level stacks, not app templates.
+Set them up once per host:
+[`../docs/traefik/vps-setup.md`](../docs/traefik/vps-setup.md) goes from a
+bare VPS to Traefik serving traffic.
 
-Everything publishes to Docker Hub under `achelesstech`. Before the first push,
-set two secrets on the app repository — `DOCKERHUB_USERNAME` and
-`DOCKERHUB_TOKEN` (a Read & Write access token, not the account password) — and
-create the target repository on Docker Hub if it does not exist yet; the free
-plan allows one private repository, so make sure a new one is private
-deliberately rather than by accident.
+## What the app examples share
 
-`build-app.yml` hardcodes its image name (`achelesstech/<template>-app`) so that
-renaming the GitHub repo cannot silently split what CI pushes from what
-`compose.prod.yml` pulls. Change both together.
+- **Two bases, one image.** A build stage `FROM` the `-dev` base runs
+  `composer install` (Composer is only in `-dev`). The production stage
+  `FROM` the runtime base gets root-owned code, and only the framework's
+  writable paths belong to `www-data`. A `dev` target `FROM` the `-dev` base,
+  with Xdebug off until `XDEBUG_MODE` is set, is what `compose.yml` runs.
+- **nginx comes from a preset.** The Dockerfile links the framework's preset
+  into `/etc/nginx/conf.d/` and runs `nginx-validate.sh`, so a broken config
+  fails the build, not production. There is no vhost to maintain; extra
+  `location` blocks go into `/etc/nginx/server.d/`.
+- **Hardened production.** `compose.prod.yml` runs every PHP
+  service `read_only`, with a sized `/tmp` tmpfs (256 MB; Moodle's `app` uses a
+  volume for its 512M uploads), `cap_drop: [ALL]`, `no-new-privileges`, a
+  `pids_limit` and a `mem_limit` that `FPM_MAX_CHILDREN=auto` sizes the
+  PHP-FPM pool from. There are no `ports:`: Traefik reaches the app on the
+  `proxy` network.
+- **One image, several roles.** `app` runs the default command (nginx and
+  PHP-FPM). Queue workers and the scheduler run the same image with their
+  own `command:`; the scheduler uses `php-base-every 60 …`.
+- **Health is built in; no `healthcheck:` overrides.** The image's check
+  picks its probe by role ([`../docs/image.md`](../docs/image.md#healthcheck)):
+  - `app`: PHP-FPM must answer on the internal status listener,
+    `127.0.0.1:8081`, plus the app's own page when `HEALTHCHECK_URL` is set
+    (Laravel's `/up`, WordPress's `/wp-login.php`);
+  - the scheduler: its `php-base-every` heartbeat must be recent;
+  - a queue worker: `none`.
 
-## What every template contains
+  Traefik routes only to containers Docker reports healthy.
+- **Migrations (and Moodle's install) are one-shot services** in the `ops` profile,
+  run by hand (`docker compose -f compose.prod.yml run --rm migrate`). They
+  never run in an entrypoint, where every replica would run them at once.
+- **Only real state is a volume:** Laravel `storage/app`, Drupal's public and
+  private files, WordPress `wp-content/uploads`, Moodle's moodledata. Code
+  always comes from the image, and framework caches are baked into it.
 
-```
-Dockerfile                      multi-stage, plus a dev target with Xdebug
-.dockerignore
-.hadolint.yaml                  lint policy, matches the base repo's
-compose.yml                     local dev, ports published, OPcache revalidating
-compose.prod.yml                Traefik-fronted, no published ports
-.env.example
-docker/vhost.conf               the one static server{} block
-docker/entrypoint.d/10-*.sh     runtime init hook
-.github/workflows/build-app.yml build, boot, assert a real 200, scan
-renovate.json
-```
-
-## Conventions all of them follow
-
-**The vhost is a static file**, validated with `nginx-validate.sh` at build
-time — so a broken vhost fails the build, not production. Use that wrapper, not
-a bare `nginx -t`: `nginx -t` creates a pid file and opens its default error log
-as side effects, and when the build runs as root those get baked in root-owned
-and nginx can never start as www-data.
-
-**Framework caches are baked into the image**, not written at startup. Writing
-them at boot means app/queue/scheduler race over the same files, and a
-persistent cache volume shadows the image copy with a stale one.
-
-**Migrations, upgrades and installs are one-shot `ops` services**, never
-entrypoint side effects that every replica runs at once.
-
-```bash
-docker compose -f compose.prod.yml --profile ops run --rm migrate   # Laravel
-docker compose -f compose.prod.yml --profile ops run --rm drush updatedb -y
-docker compose -f compose.prod.yml --profile ops run --rm install   # Moodle / WP
-docker compose -f compose.prod.yml --profile ops run --rm upgrade   # Moodle
-```
-
-**Worker containers override the healthcheck.** They run no nginx, so the
-image's `/fpm-ping` check can never pass.
-
-**Only real state is a volume.** Laravel `storage/app`, Drupal
-`sites/default/files`, Moodle `/var/moodledata`, WordPress
-`wp-content/uploads`. Code always comes from the image.
-
-## Reverse proxy
-
-All of these are backends behind Traefik, usually with Cloudflare in front.
-Read [`../docs/reverse-proxy.md`](../docs/reverse-proxy.md) before going live —
-it covers the Traefik `trustedIPs` setting that keeps X-Forwarded-For
-trustworthy, and the five Cloudflare behaviours that break PHP apps (SSL mode,
-the 100 MB upload cap, the 100 s timeout, cache rules, real-IP headers).
-
-## Moodle specifics
-
-**Version differences are detected, not assumed.** Moodle's `public/`
-restructure and its Routing Engine (`r.php`) arrived in different releases, and
-hardcoding either into a Dockerfile guarantees it goes stale. `select-vhost.sh`
-inspects the extracted tarball at build time, installs `vhost-public.conf` or
-`vhost-legacy.conf`, and writes what it found to `/etc/moodle-layout`. The build
-log prints it.
-
-**Moving to 5.3 LTS in October:** in `moodle`, change `MOODLE_BRANCH` to
-`503`. Nothing else should need editing. Verify with the
-build log and the doctor.
-
-**When something is wrong**, run the diagnostic rather than guessing:
-
-```bash
-docker compose exec app moodle-doctor.sh
-```
-
-It checks the specific ways Moodle-on-nginx fails — the ones Apache hides
-because `.htaccess` and `mod_php` handle pathinfo and X-Sendfile differently:
-
-- nginx docroot vs the actual Moodle layout
-- `wwwroot` trailing slash, and `sslproxy` vs an `https://` wwwroot
-  (mismatch = infinite redirect loop, with no error message)
-- dataroot inside the web root, or not writable
-- the `/dataroot/` X-Accel-Redirect location: present, `internal`, trailing
-  slash on the alias, and **`^~` rather than a plain prefix** — without `^~` the
-  internal redirect re-matches and the static-asset regex wins, so every CSS and
-  image served through `pluginfile.php` 404s. That is what "the theme is
-  broken" almost always means.
-- live slashargument requests (`/theme/styles.php/...`,
-  `/lib/requirejs.php/1/all.js`) actually reaching PHP
-- `r.php` present but `$CFG->routerconfigured` not set
-- whether cron is running anywhere
-
-## WordPress specifics
-
-The `wp-content/uploads` PHP deny rule in the vhost is **mandatory**, not
-optional hardening — arbitrary upload followed by direct execution is the most
-exploited path in the WordPress ecosystem. It is verified in CI by planting a
-`shell.php` and asserting a 404.
-
-Plugins and themes should be committed to the repo, not installed through the
-admin UI: the container filesystem is not the source of truth and anything
-installed there is lost on the next deploy. `DISALLOW_FILE_MODS` is set unless
-you opt out with `WORDPRESS_ALLOW_UPDATES=true`.
+Before going live, read [`../docs/reverse-proxy.md`](../docs/reverse-proxy.md):
+Traefik's `trustedIPs`, the keep-alive and timeout chain, and the Cloudflare
+settings that break PHP apps.
 
 ## Symfony
 
-No template. Start from `laravel` — the layout is the same (front controller
-in `public/`, composer, optional Node build). Replace the artisan calls in the
-entrypoint hook with `bin/console cache:warmup`.
+There is no Symfony example. Start from `laravel/`: the layout is the same
+(front controller in `public/`, Composer, optional Node build), and the
+`laravel.conf` preset fits. Replace the artisan steps with
+`bin/console cache:warmup`.

@@ -206,20 +206,31 @@ correct there — the same expression is written differently in the two places.
 
 ## Worker containers
 
-Queue workers, schedulers, Moodle cron and one-shot `ops` jobs must **not**
-carry Traefik labels. They run no nginx. They also cannot pass the `php-base`
-healthcheck, which curls `/fpm-ping`:
+Queue workers, schedulers and one-shot `ops` jobs must **not** carry Traefik
+labels and don't join the `proxy` network. They run no nginx, so there is
+nothing to route to. They need no `healthcheck:` either: the `php-base`
+healthcheck picks its probe from the container's command.
+
+| Container | `command:` | Health |
+|---|---|---|
+| web | the default (`php-base-web`) | `fpm`: `/fpm-ping` through PHP-FPM, on the internal `127.0.0.1:8081` listener, plus `HEALTHCHECK_URL` if set |
+| scheduler | `php-base-every 60 …` | `heartbeat`: the last successful run is recent |
+| queue worker, anything else | e.g. `php artisan queue:work` | `none`: always healthy |
 
 ```yaml
   queue:
-    command: ["php", "artisan", "queue:work"]
+    command: [php, artisan, queue:work, --max-time=3600]
     networks: [internal]          # not proxy
-    # no labels
-    healthcheck:
-      test: ["CMD-SHELL", "pgrep -f 'queue:work' >/dev/null || exit 1"]
+    # no labels, no healthcheck override
+
+  scheduler:
+    command: [php-base-every, "60", php, artisan, schedule:run]
+    networks: [internal]
 ```
 
-Every app template in [`examples/`](../../examples/) already does this.
+Don't add `pgrep` checks: they show that a process exists, not that it
+works, and the image's own check is better for both roles. Every app
+template in [`examples/`](../../examples/) follows this.
 
 ## Health: Traefik routes only to healthy containers
 
@@ -293,22 +304,25 @@ container is replaced.
   `REMOTE_ADDR`. Do not add `CF-Connecting-IP` handling on top; two sources of
   truth for the client IP is how you end up trusting the wrong one.
 - **HTTP/3** — advertised by the entryPoint for every router.
-- **Upload size** — nginx `client_max_body_size` in the app's vhost and
-  `PHP_UPLOAD_MAX_FILESIZE`. Cloudflare's edge cap (100 MB on Free/Pro) sits
-  above both and wins.
+- **Upload size** — `PHP_UPLOAD_MAX_FILESIZE` and `PHP_POST_MAX_SIZE`;
+  nginx's `client_max_body_size` follows `post_max_size`. Cloudflare's edge
+  cap (100 MB on Free/Pro) sits above both and wins.
 
 ## Worked example — Moodle behind Cloudflare
+
+Cut down from [`examples/moodle/compose.prod.yml`](../../examples/moodle/compose.prod.yml),
+with a tighter rate limit on the login form added:
 
 ```yaml
 services:
   app:
-    image: docker.io/achelesstech/moodle52:latest
+    image: docker.io/achelesstech/moodle-app:latest   # your private app image
     restart: unless-stopped
     networks: [proxy, internal]
     environment:
-      MOODLE_URL: https://lms.example.com
-      MOODLE_SSLPROXY: "true"        # mandatory, or infinite redirect loop
+      MOODLE_WWWROOT: https://lms.example.com   # config.php turns on sslproxy for https
       PHP_UPLOAD_MAX_FILESIZE: 512M
+      PHP_POST_MAX_SIZE: 512M                   # nginx's body limit follows it
     labels:
       - traefik.enable=true
       - traefik.docker.network=proxy
@@ -327,13 +341,11 @@ services:
       - traefik.http.routers.lms-login.middlewares=ratelimit-login@file,chain-web@file
       - traefik.http.routers.lms-login.service=lms
 
-  cron:
-    image: docker.io/achelesstech/moodle52:latest
-    command: ["moodle-cron.sh"]
+  scheduler:
+    image: docker.io/achelesstech/moodle-app:latest
+    command: [php-base-every, "60", php, admin/cli/cron.php, --keep-alive=0]
     networks: [internal]
-    # no labels — no nginx, no route
-    healthcheck:
-      test: ["CMD-SHELL", "pgrep -f moodle-cron >/dev/null || exit 1"]
+    # no labels: no nginx, no route. Health is the php-base-every heartbeat.
 
 networks:
   proxy:
@@ -342,7 +354,8 @@ networks:
 ```
 
 Note `lms-login` needs an explicit `.service=lms`: a router only gets the
-container's service implicitly when it is the *only* router on it.
+container's service implicitly when it is the *only* router on it. The real
+file also sets the hardening flags, `mem_limit`, `/tmp` and the database.
 
 ## When a route does not work
 

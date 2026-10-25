@@ -93,7 +93,7 @@ restarting it until `migrate` has run.
 
 | Service | Role | `mem_limit` |
 |---|---|---|
-| `app` | web: nginx + PHP-FPM; healthy when `/fpm-ping` and Laravel's `/up` answer | 1g |
+| `app` | web: nginx + PHP-FPM; healthy when `/fpm-ping` on the internal `127.0.0.1:8081` answers through PHP-FPM and `HEALTHCHECK_URL` (Laravel's `/up`) returns 2xx/3xx | 1g |
 | `queue` | `php artisan queue:work --max-time=3600`; exits hourly on purpose, `restart:` brings it back | 512m |
 | `scheduler` | `php-base-every 60 php artisan schedule:run`; healthy while runs keep succeeding | 512m |
 | `migrate` | `php artisan migrate --force`, profile `ops`, run by hand | 512m |
