@@ -1,119 +1,101 @@
 # =============================================================================
-# Production — WordPress behind an external Traefik
+# Production — WordPress behind Traefik (examples/traefik)
 # =============================================================================
-#   docker compose -f compose.prod.yml up -d --build
-#   docker compose -f compose.prod.yml --profile ops run --rm install
-#   docker compose -f compose.prod.yml --profile ops run --rm wp plugin list
+#   docker compose -f compose.prod.yml up -d --build      (or pull, from CI)
+#   docker compose -f compose.prod.yml exec app wp core install …   (once)
+#   docker compose -f compose.prod.yml run --rm migrate   (after a core upgrade)
+#
+# No `ports:`. Traefik reaches the app on the shared `proxy` network
+# (docker network create proxy); TLS, HSTS and redirects are Traefik's job.
 # =============================================================================
 
-x-wp-env: &wp-env
-  env_file: .env
-  environment:
-    WORDPRESS_DB_HOST:     db
-    WORDPRESS_DB_NAME:     ${WORDPRESS_DB_NAME:-wordpress}
-    WORDPRESS_DB_USER:     ${WORDPRESS_DB_USER:-wordpress}
-    WORDPRESS_DB_PASSWORD: ${WORDPRESS_DB_PASSWORD:?set WORDPRESS_DB_PASSWORD in .env}
-    WORDPRESS_URL:         ${WORDPRESS_URL:?set WORDPRESS_URL in .env, e.g. https://example.com}
-    PHP_MEMORY_LIMIT:        256M
-    PHP_UPLOAD_MAX_FILESIZE: 128M
-    PHP_POST_MAX_SIZE:       128M
-    PHP_OPCACHE_VALIDATE_TIMESTAMPS: "0"
-    FPM_MAX_CHILDREN: "16"
+# The site image: its one name. build-app.yml pushes the same one (APP_IMAGE
+# there). Keep the repository PRIVATE: it contains your code. See README.md.
+x-image: &image ${APP_IMAGE:-docker.io/achelesstech/wordpress-app}:${APP_TAG:-latest}
+
+# What app, scheduler and migrate share.
+x-wordpress: &wordpress
+  image: *image
+  restart: unless-stopped
+  # required: false only so `docker compose config` works without a .env;
+  # wp-config.php still refuses to run without the settings it needs.
+  env_file:
+    - path: .env
+      required: false
+  # Hardened run: nothing is writable but /tmp and the uploads volume.
+  read_only: true
+  # /tmp holds uploads in flight and ImageMagick's cache: at least
+  # 2 x post_max_size + 32 MB. It is RAM, charged to mem_limit, and
+  # FPM_MAX_CHILDREN=auto reserves its size; always give it a size=.
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,size=256m
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  pids_limit: 256
+  # Only uploads hold state. Core, themes and plugins come from the image.
+  volumes:
+    - wp-uploads:/var/www/html/wp-content/uploads
+  networks: [internal]
+  depends_on:
+    db:
+      condition: service_healthy
 
 services:
+  # Web role: nginx + PHP-FPM (the image's default command).
   app:
+    <<: *wordpress
     build:
       context: .
-      target: wordpress
-    image: docker.io/achelesstech/wordpress-app:latest
-    restart: unless-stopped
-    <<: *wp-env
-    volumes:
-      # Only uploads are state. Core, themes and plugins come from the image.
-      - wp-uploads:/var/www/html/wp-content/uploads
-    depends_on:
-      db:
-        condition: service_healthy
+      target: production
+    # FPM_MAX_CHILDREN=auto: (1024 - 256 OPcache - 64 - 256 tmpfs) / 64 = 7 workers.
+    mem_limit: 1g
+    # nginx drains for up to 15 s, then PHP-FPM for up to 30 s.
+    stop_grace_period: 60s
     networks: [proxy, internal]
     labels:
       - traefik.enable=true
       - traefik.docker.network=proxy
-      - traefik.http.services.wordpress.loadbalancer.server.port=8080
-      # - traefik.http.routers.wordpress.rule=Host(`example.com`)
-      # - traefik.http.routers.wordpress.entrypoints=websecure
-      # - traefik.http.routers.wordpress.tls.certresolver=letsencrypt
+      - traefik.http.routers.${TRAEFIK_ROUTER:?set TRAEFIK_ROUTER in .env}.rule=Host(`${APP_DOMAIN:?set APP_DOMAIN in .env}`)
+      - traefik.http.routers.${TRAEFIK_ROUTER}.entrypoints=websecure
+      - traefik.http.routers.${TRAEFIK_ROUTER}.tls.certresolver=${TRAEFIK_CERT_RESOLVER:-cloudflare}
+      - traefik.http.routers.${TRAEFIK_ROUTER}.middlewares=chain-web@file
+      - traefik.http.services.${TRAEFIK_ROUTER}.loadbalancer.server.port=8080
 
-  # WordPress needs wp-cron. The default "run it on page views" behaviour is
-  # unreliable on a low-traffic site and slow on a busy one, so disable it with
-  # DISABLE_WP_CRON and run it properly here.
-  cron:
-    image: docker.io/achelesstech/wordpress-app:latest
-    restart: unless-stopped
-    command:
-      - /bin/sh
-      - -c
-      - 'while true; do wp cron event run --due-now || true; sleep 60; done'
-    <<: *wp-env
-    volumes:
-      - wp-uploads:/var/www/html/wp-content/uploads
+  # Scheduler role: WordPress's cron on every minute boundary, instead of on
+  # page views (DISABLE_WP_CRON). Healthy while runs keep succeeding (the
+  # image's heartbeat check).
+  scheduler:
+    <<: *wordpress
+    command: [php-base-every, "60", wp, cron, event, run, --due-now]
+    mem_limit: 512m
+    # After app: Docker fills a new volume from the image when the first
+    # container mounts it, and containers created at the same moment race.
     depends_on:
       db:
         condition: service_healthy
-    networks: [internal]
-    # No nginx in this container, so the image healthcheck cannot pass.
-    healthcheck:
-      test: ["CMD-SHELL", "pgrep -f 'sleep 60' >/dev/null || pgrep -f wp >/dev/null || exit 1"]
-      interval: 60s
-      timeout: 5s
-      retries: 3
+      app:
+        condition: service_started
+    # A run in progress is allowed to finish.
+    stop_grace_period: 130s
 
-  install:
-    image: docker.io/achelesstech/wordpress-app:latest
-    <<: *wp-env
-    environment:
-      WORDPRESS_RUN_INSTALL:   "true"
-      WORDPRESS_SITE_TITLE:    ${WORDPRESS_SITE_TITLE:-WordPress}
-      WORDPRESS_ADMIN_USER:    ${WORDPRESS_ADMIN_USER:-admin}
-      WORDPRESS_ADMIN_PASSWORD: ${WORDPRESS_ADMIN_PASSWORD:?set in .env}
-      WORDPRESS_ADMIN_EMAIL:   ${WORDPRESS_ADMIN_EMAIL:?set in .env}
-    command: ["wp", "core", "is-installed"]
-    volumes:
-      - wp-uploads:/var/www/html/wp-content/uploads
-    depends_on:
-      db:
-        condition: service_healthy
-    networks: [internal]
-    healthcheck:
-      disable: true
-    profiles: [ops]
-
-  # docker compose -f compose.prod.yml --profile ops run --rm wp <command>
-  wp:
-    image: docker.io/achelesstech/wordpress-app:latest
-    entrypoint: ["wp"]
-    <<: *wp-env
-    volumes:
-      - wp-uploads:/var/www/html/wp-content/uploads
-    depends_on:
-      db:
-        condition: service_healthy
-    networks: [internal]
-    healthcheck:
-      disable: true
+  # One-shot, after a WordPress upgrade (WORDPRESS_VERSION in the Dockerfile):
+  #   docker compose -f compose.prod.yml run --rm migrate
+  migrate:
+    <<: *wordpress
+    command: [wp, core, update-db]
+    restart: "no"
+    mem_limit: 512m
     profiles: [ops]
 
   db:
-    image: mariadb:11.4
+    image: docker.io/library/mariadb:11.4@sha256:250e1609e93c0e6aecf64bfbab2d84d5e89d2481540fe77447ff6c855c3b1873
     restart: unless-stopped
-    env_file: .env
     environment:
-      MARIADB_DATABASE:             ${WORDPRESS_DB_NAME:-wordpress}
-      MARIADB_USER:                 ${WORDPRESS_DB_USER:-wordpress}
-      MARIADB_PASSWORD:             ${WORDPRESS_DB_PASSWORD:?set WORDPRESS_DB_PASSWORD in .env}
+      MARIADB_DATABASE: ${WORDPRESS_DB_NAME:-wordpress}
+      MARIADB_USER: ${WORDPRESS_DB_USER:-wordpress}
+      MARIADB_PASSWORD: ${WORDPRESS_DB_PASSWORD?set WORDPRESS_DB_PASSWORD in .env}
       MARIADB_RANDOM_ROOT_PASSWORD: "yes"
-    command:
-      - --character-set-server=utf8mb4
-      - --collation-server=utf8mb4_unicode_ci
+    command: [--character-set-server=utf8mb4, --collation-server=utf8mb4_unicode_ci]
     volumes:
       - db-data:/var/lib/mysql
     healthcheck:
@@ -131,4 +113,3 @@ networks:
   proxy:
     external: true
   internal:
-    driver: bridge

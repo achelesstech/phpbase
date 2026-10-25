@@ -1,20 +1,22 @@
-# hadolint policy — achelesstech images
+# hadolint policy — app images on achelesstech/php-base (as in the base repo)
 #
 # ignored:
-#   DL3018  "pin versions in apk add". Declined deliberately. These images are
-#           rebuilt on a schedule precisely so they pick up Alpine patch
-#           releases; a pinned version freezes the CVE. Worse, Alpine garbage-
-#           collects superseded package versions from its repos within weeks, so
-#           a pinned build stops being reproducible AND starts failing outright.
-#           Reproducibility here comes from pinning the BASE IMAGE BY DIGEST,
-#           which is what examples/*/Dockerfile and Renovate actually do.
+#   DL3018  "pin versions in apk add". Declined deliberately, for any package
+#           you add: Alpine garbage-collects superseded package versions within
+#           weeks, so a pinned build stops being reproducible AND starts
+#           failing outright, and a pinned version freezes the CVE.
+#           Reproducibility comes from pinning the BASE IMAGES BY DIGEST, which
+#           the Dockerfile does and Renovate maintains.
 #   DL3066  "non-numeric user-id". `USER www-data` is correct here: the base
-#           image deletes the stock www-data and recreates it as uid/gid 1000,
-#           asserting both at build time, so the name is stable and readable.
-#   SC2086  Fires on `apk add $PHPIZE_DEPS`. That variable is a space-separated
-#           package list set by the upstream php image and is *required* to
-#           word-split; quoting it breaks the build.
+#           image recreates www-data as uid/gid 1000 and asserts both at build
+#           time, so the name is stable and readable.
+#   DL4006  "set SHELL -o pipefail". A RUN with a pipe starts with
+#           `set -eux -o pipefail` instead (busybox ash supports it); a SHELL
+#           instruction would change every later RUN.
+#   SC3040  "pipefail is undefined in POSIX sh": /bin/sh is busybox ash, which
+#           implements it.
 ignored:
   - DL3018
   - DL3066
-  - SC2086
+  - DL4006
+  - SC3040

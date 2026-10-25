@@ -4,11 +4,24 @@
   "labels": ["dependencies"],
   "packageRules": [
     {
-      "description": "Keep the php-base digest current. This is the CVE patch path: the base is rebuilt weekly, Renovate opens the bump here.",
+      "description": "Keep both php-base digests current: PHP_BASE_IMAGE (:8.4) and PHP_BASE_DEV_IMAGE (:8.4-dev) in the Dockerfile, in one PR so they move together. This is the CVE patch path: the base is rebuilt weekly, and Renovate opens the bump here.",
       "matchPackageNames": ["docker.io/achelesstech/php-base"],
       "pinDigests": true,
+      "groupName": "php-base",
       "automerge": false,
       "schedule": ["after 6am on monday"]
+    },
+    {
+      "description": "Moving to another PHP line (8.4 -> 8.5) is a decision, not a routine bump: digests only.",
+      "matchPackageNames": ["docker.io/achelesstech/php-base"],
+      "matchUpdateTypes": ["major", "minor", "patch"],
+      "enabled": false
+    },
+    {
+      "description": "MariaDB stays on the 11.4 LTS line: a new line is a deliberate upgrade, with a backup first. Its digest stays current.",
+      "matchPackageNames": ["docker.io/library/mariadb"],
+      "matchUpdateTypes": ["major", "minor"],
+      "enabled": false
     }
   ]
 }

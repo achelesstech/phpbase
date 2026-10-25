@@ -1,22 +1,16 @@
 # =============================================================================
 # Local development — WordPress
 # =============================================================================
-#   docker compose up -d --build     → http://localhost:8081
-#   docker compose --profile tools run --rm wp plugin list
+#   docker compose up -d --build
+#   docker compose exec app wp core install --url=http://localhost:8080 \
+#       --title=Dev --admin_user=admin --admin_password=admin \
+#       --admin_email=admin@example.com --skip-email
+#
+# http://localhost:8080. Your wp-content directories are bind-mounted and
+# OPcache re-checks file times, so edits show up without a rebuild. Xdebug is
+# loaded but off:
+#   XDEBUG_MODE=debug docker compose up -d
 # =============================================================================
-
-x-wp-env: &wp-env
-  environment:
-    WORDPRESS_DB_HOST:     db
-    WORDPRESS_DB_NAME:     wordpress
-    WORDPRESS_DB_USER:     wordpress
-    WORDPRESS_DB_PASSWORD: wordpress
-    WORDPRESS_URL:         http://localhost:8081
-    WORDPRESS_ALLOW_UPDATES: "true"
-    PHP_SESSION_COOKIE_SECURE: "0"
-    PHP_OPCACHE_VALIDATE_TIMESTAMPS: "1"
-    PHP_DISPLAY_ERRORS: "On"
-    PHP_MEMORY_LIMIT: 512M
 
 services:
   app:
@@ -24,38 +18,41 @@ services:
       context: .
       target: dev
     ports:
-      - "8081:8080"
-    <<: *wp-env
+      - "127.0.0.1:8080:8080"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      WORDPRESS_URL: http://localhost:8080
+      WORDPRESS_ENVIRONMENT_TYPE: local
+      WORDPRESS_DEBUG: "true"
+      # Same fallbacks as the db service below; a fixed dev-only secret.
+      WORDPRESS_DB_PASSWORD: ${WORDPRESS_DB_PASSWORD:-wordpress}
+      WORDPRESS_SECRET: ${WORDPRESS_SECRET:-dev-only-secret-never-use-in-production}
+      PHP_OPCACHE_VALIDATE_TIMESTAMPS: "1"
+      XDEBUG_MODE: ${XDEBUG_MODE:-off}
+    # Lets Xdebug reach the IDE on the host (Linux).
+    extra_hosts:
+      - host.docker.internal:host-gateway
     volumes:
-      - wp-uploads:/var/www/html/wp-content/uploads
-      # Develop your own theme/plugin against the container:
+      - ./wp-content/mu-plugins:/var/www/html/wp-content/mu-plugins
+      # Your own theme and plugins, one line each (not the whole wp-content/,
+      # which would hide the themes and plugins core ships):
       # - ./wp-content/themes/mytheme:/var/www/html/wp-content/themes/mytheme
-    depends_on:
-      db:
-        condition: service_healthy
-
-  wp:
-    build:
-      context: .
-      target: dev
-    entrypoint: ["wp"]
-    <<: *wp-env
-    volumes:
+      # - ./wp-content/plugins/myplugin:/var/www/html/wp-content/plugins/myplugin
       - wp-uploads:/var/www/html/wp-content/uploads
     depends_on:
       db:
         condition: service_healthy
-    healthcheck:
-      disable: true
-    profiles: [tools]
 
   db:
-    image: mariadb:11.4
+    image: docker.io/library/mariadb:11.4@sha256:250e1609e93c0e6aecf64bfbab2d84d5e89d2481540fe77447ff6c855c3b1873
     environment:
-      MARIADB_DATABASE:             wordpress
-      MARIADB_USER:                 wordpress
-      MARIADB_PASSWORD:             wordpress
+      MARIADB_DATABASE: ${WORDPRESS_DB_NAME:-wordpress}
+      MARIADB_USER: ${WORDPRESS_DB_USER:-wordpress}
+      MARIADB_PASSWORD: ${WORDPRESS_DB_PASSWORD:-wordpress}
       MARIADB_RANDOM_ROOT_PASSWORD: "yes"
+    command: [--character-set-server=utf8mb4, --collation-server=utf8mb4_unicode_ci]
     volumes:
       - db-data:/var/lib/mysql
     healthcheck:
