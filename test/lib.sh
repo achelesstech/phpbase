@@ -36,6 +36,9 @@ cleanup() {
     docker volume ls -q --filter "label=${LABEL}" | xargs -r docker volume rm -f >/dev/null 2>&1 || true
     docker network rm "$NET" >/dev/null 2>&1 || true
     docker rmi -f "$FIXTURE_TAG" >/dev/null 2>&1 || true
+    # Images derived from the fixture (test/runtime/70-hardening.sh hook_image).
+    docker image ls --filter "reference=${FIXTURE_TAG}-*" --format '{{.Repository}}:{{.Tag}}' \
+        | xargs -r docker rmi -f >/dev/null 2>&1 || true
     rm -rf "$TMPD"
 }
 trap cleanup EXIT

@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # hardening — root-owned config, no stray sockets or log files, a runtime dir
-# that is wiped at every start, and writable-hook detection. The read-only root
+# that is wiped at every start, and hook owner/mode checks. The read-only root
 # filesystem is covered by boot's hardened-flags check: start() runs its
 # containers with --read-only.
 
@@ -58,3 +58,56 @@ ST="$(start strict -e PHP_BASE_STRICT=1 -v "${hook_file}:/docker-entrypoint.d/50
 sleep 5
 [[ "$(docker inspect -f '{{.State.Status}}:{{.State.ExitCode}}' "$ST")" == "exited:1" ]] \
     && ok "PHP_BASE_STRICT=1 refuses to start with a writable hook" || bad "strict mode did not refuse ($(docker inspect -f '{{.State.Status}}:{{.State.ExitCode}}' "$ST"))"
+
+# Hook owner and mode, baked into an image: built FROM the fixture with
+# COPY --chown/--chmod, so host file ownership plays no part.
+# hook_image NAME LINE... — build the fixture plus these Dockerfile lines (with
+# hook.sh in the context); print its tag. lib.sh's cleanup removes the tag.
+hook_image() {
+    local ctx="${TMPD}/hook-$1" tag="${FIXTURE_TAG}-hook-$1"
+    mkdir -p "$ctx"
+    printf '#!/bin/sh\ntrue\n' > "${ctx}/hook.sh"
+    printf '%s\n' "FROM ${FIXTURE_TAG}" "${@:2}" > "${ctx}/Dockerfile"
+    docker build --quiet -t "$tag" "$ctx" >/dev/null
+    echo "$tag"
+}
+uid_image="$(hook_image uid 'COPY --chown=1000:1000 --chmod=0555 hook.sh /docker-entrypoint.d/50-x.sh')"
+mode_image="$(hook_image mode 'COPY --chown=0:0 --chmod=0666 hook.sh /docker-entrypoint.d/50-x.sh')"
+# The Kubernetes ConfigMap/Secret layout: the hook is a symlink (mode 777 as
+# lstat sees it) to a root-owned 0644 file. The target is what runs. mkdir
+# first: COPY --chmod would give the new ..data directory mode 0644 as well.
+link_image="$(hook_image link 'USER root' \
+    'RUN mkdir -m 0755 /docker-entrypoint.d/..data' \
+    'COPY --chmod=0644 hook.sh /docker-entrypoint.d/..data/50-x.sh' \
+    'RUN ln -s ..data/50-x.sh /docker-entrypoint.d/50-x.sh' \
+    'USER www-data')"
+HU="$(start hookuid "$uid_image")"
+wait_health "$HU" || true
+grep -q <<<"$(docker logs "$HU" 2>&1)" 'WARNING: /docker-entrypoint.d/50-x.sh is not root-owned' \
+    && ok "a hook not owned by root is reported" || bad "non-root-owned hook not reported"
+HUS="$(start hookuidstrict -e PHP_BASE_STRICT=1 "$uid_image")"
+sleep 5
+[[ "$(docker inspect -f '{{.State.Status}}:{{.State.ExitCode}}' "$HUS")" == "exited:1" ]] \
+    && ok "PHP_BASE_STRICT=1 refuses to start with a non-root-owned hook" \
+    || bad "strict mode did not refuse a non-root-owned hook ($(docker inspect -f '{{.State.Status}}:{{.State.ExitCode}}' "$HUS"))"
+HM="$(start hookmode "$mode_image")"
+wait_health "$HM" || true
+grep -q <<<"$(docker logs "$HM" 2>&1)" 'WARNING: /docker-entrypoint.d/50-x.sh is writable by group or others' \
+    && ok "a root-owned, group/other-writable hook is reported" || bad "group/other-writable hook not reported"
+if grep -q <<<"$(docker logs "$APP" 2>&1)" 'WARNING: /docker-entrypoint.d/10-fixture.sh'; then
+    bad "the fixture's root-owned 0644 hook triggered a warning"
+else
+    ok "the fixture's root-owned 0644 hook: no warning"
+fi
+HL="$(start hooklink -e PHP_BASE_STRICT=1 "$link_image")"
+wait_health "$HL" && ok "PHP_BASE_STRICT=1 starts with a hook symlinked to a root-owned 0644 file" \
+    || bad "strict mode refused a hook symlinked to a root-owned 0644 file"
+hl_logs="$(docker logs "$HL" 2>&1)"
+if grep -q <<<"$hl_logs" 'WARNING: /docker-entrypoint.d/50-x.sh'; then
+    bad "a hook symlinked to a root-owned 0644 file triggered a warning"
+elif ! grep -q <<<"$hl_logs" 'running /docker-entrypoint.d/50-x.sh'; then
+    bad "the symlinked hook never ran, so the no-warning check proves nothing"
+else
+    ok "a hook symlinked to a root-owned 0644 file runs with no warning"
+fi
+docker rm -f -v "$HU" "$HUS" "$HM" "$HL" >/dev/null

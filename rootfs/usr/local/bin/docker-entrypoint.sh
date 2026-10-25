@@ -250,18 +250,31 @@ render_services() {
 }
 
 # ── 6. Application hooks ─────────────────────────────────────────────────────
-# Hooks run at every start, so a hook the runtime user can modify is a
-# persistence channel for a compromised PHP process. Warn (PHP_BASE_STRICT=1:
-# refuse) when one is. COPY hooks without --chown: root-owned, mode 0755.
+# Hooks run at every start, so a hook anyone but root can modify is a
+# persistence channel for a compromised PHP process: its owner can chmod it
+# back to writable, and group/other write bits need no chmod at all. Warn
+# (PHP_BASE_STRICT=1: refuse) on either. COPY hooks without --chown:
+# root-owned, mode 0755.
 run_hooks() {
     [ -d /docker-entrypoint.d ] || return 0
     [ ! -w /docker-entrypoint.d ] || warn "/docker-entrypoint.d is writable by uid $(id -u)"
     for hook in /docker-entrypoint.d/*.sh; do
         [ -e "$hook" ] || continue
-        if [ -w "$hook" ]; then
-            warn "${hook} is writable by uid $(id -u) — COPY it without --chown (root-owned)"
-            [ "${PHP_BASE_STRICT:-0}" != 1 ] || die "refusing to run a runtime-writable hook (PHP_BASE_STRICT=1)"
+        # busybox stat: owner uid, then the octal mode without a leading 0.
+        # -L judges what runs: a symlink's own mode is always 777, and
+        # Kubernetes ConfigMap/Secret volumes mount every file as one.
+        owner_mode="$(stat -L -c '%u %a' "$hook")"
+        unsafe=0
+        if [ "${owner_mode% *}" != 0 ]; then
+            warn "${hook} is not root-owned"
+            unsafe=1
         fi
+        if [ $((0${owner_mode#* } & 022)) -ne 0 ]; then
+            warn "${hook} is writable by group or others"
+            unsafe=1
+        fi
+        [ "$unsafe" = 0 ] || [ "${PHP_BASE_STRICT:-0}" != 1 ] \
+            || die "refusing to run ${hook} (PHP_BASE_STRICT=1): COPY it without --chown, mode 0755"
         # Read-only bind mounts frequently lose the exec bit, so fall back to
         # sh. Hook output goes to stderr too, for the same reason as log().
         if [ -x "$hook" ]; then
