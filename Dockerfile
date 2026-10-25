@@ -357,7 +357,7 @@ LABEL org.opencontainers.image.title="achelesstech/php-base" \
 RUN --mount=type=bind,from=php-upstream,source=/etc/alpine-release,target=/tmp/upstream-alpine-release \
     set -eux; \
     mkdir -p /docker-entrypoint.d /etc/nginx/conf.d /etc/nginx/server.d /etc/php-base /usr/local/etc/php-fpm.d; \
-    for d in /etc/nginx /etc/php-base /usr/local/etc/php /usr/local/etc/php-fpm.d /docker-entrypoint.d; do \
+    for d in /etc/nginx /etc/php-base /etc/ImageMagick-7 /usr/local/etc/php /usr/local/etc/php-fpm.d /docker-entrypoint.d; do \
         chown -Rh root:root "$d"; \
         find "$d" -type d -exec chmod 0755 {} +; \
         find "$d" -type f -exec chmod 0644 {} +; \

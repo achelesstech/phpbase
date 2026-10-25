@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ImageMagick security policy for achelesstech/php-base (spec §7.8).
+
+  Replaces Alpine's shipped policy.xml, which permits everything. Root-owned;
+  an app that needs another format (TIFF, say) ships its own copy of this
+  file with that coder added to the allowlist.
+
+  Two jobs:
+    1. An allowlist of coders: the formats PHP apps read and write, and
+       nothing else. Not the scripting, vector, text and URL coders (MSL,
+       MVG, SVG, TEXT, LABEL, HTTP, ...), and no delegates (no ghostscript,
+       no curl, no shelling out at all).
+    2. A RAM cap per operation. The container is meant to run with
+       --memory 1g and /tmp on a tmpfs, where ImageMagick's cache files are
+       RAM as well, so memory + map + disk together stay at or under 512 MiB
+       and a huge image fails with "cache resources exhausted" instead of an
+       OOM kill.
+
+  Rules are processed in order: the deny-all coder rule first, then the
+  allowlist. Coder names are case-sensitive.
+-->
+<policymap>
+  <!-- No external programs: not ghostscript, not curl, nothing. -->
+  <policy domain="delegate" rights="none" pattern="*"/>
+  <!-- No indirect reads: "@file" would splice a file into an argument. -->
+  <policy domain="path" rights="none" pattern="@*"/>
+
+  <!-- Coders: deny all, then allow the formats the apps need (read + write).
+       PNG8..PNG64 are PNG's write-time aliases; HEIF is HEIC's. -->
+  <policy domain="coder" rights="none" pattern="*"/>
+  <policy domain="coder" rights="read|write" pattern="{JPEG,JPG,PNG,PNG8,PNG24,PNG32,PNG48,PNG64,GIF,WEBP,AVIF,HEIC,HEIF,BMP,ICO}"/>
+
+  <!-- Hard rejection: wider or taller than 16384 px fails with "width or
+       height exceeds limit" (16KiP = 16384; 16KP would be 16000). -->
+  <policy domain="resource" name="width" value="16KiP"/>
+  <policy domain="resource" name="height" value="16KiP"/>
+
+  <!-- The pixel cache. This build is Q16-HDRI: 4 bytes per channel, so an
+       RGB image costs 12 bytes per pixel, RGBA 16.
+         memory  the heap cache. 384 MiB holds a 24-megapixel photo either
+                 way (275 MiB as RGB, 366 MiB as RGBA), the input a phone
+                 upload gives WordPress.
+         area    in pixels: above it the cache goes to a file even if memory
+                 would fit. 32 MP x 12 B = 366 MiB, i.e. the largest RGB
+                 image memory holds.
+         disk    the cache file's size limit; map is whether that file is
+                 memory-mapped (map <= disk is otherwise pointless). Both are
+                 small: on a tmpfs the file is RAM too, so a spill is worth
+                 little, and anything larger fails cleanly.
+       384 + 64 + 64 = 512 MiB. -->
+  <policy domain="resource" name="memory" value="384MiB"/>
+  <policy domain="resource" name="area" value="32MP"/>
+  <policy domain="resource" name="map" value="64MiB"/>
+  <policy domain="resource" name="disk" value="64MiB"/>
+
+  <!-- Budget of processing time per image, in seconds (cumulative per
+       operation, not a deadline from process start). -->
+  <policy domain="resource" name="time" value="120"/>
+  <!-- One OpenMP thread: PHP-FPM already runs one worker per core. -->
+  <policy domain="resource" name="thread" value="1"/>
+  <!-- Frames per image sequence (animated GIF, multi-size ICO). -->
+  <policy domain="resource" name="list-length" value="32"/>
+</policymap>
