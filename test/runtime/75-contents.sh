@@ -70,10 +70,14 @@ logged=no; for _ in 1 2 3; do grep -q 'marker-7f3a' <<<"$(docker logs "$APP" 2>&
 [[ "$logged" == yes ]] && ok "PHP error_log() output reaches docker logs" || bad "error_log() marker not in docker logs"
 
 # Size ceiling: versions.json's max_size_mb for this line (MB = 10^6 bytes).
+# The ceilings are amd64 numbers; other architectures report their size only.
 max_mb="$(jq -r --arg l "$line" '.php[] | select(.line == $l) | .max_size_mb // ""' "$HERE/../versions.json")"
 size="$(docker image inspect -f '{{.Size}}' "$IMAGE")"
+size_arch="$(docker image inspect -f '{{.Architecture}}' "$IMAGE")"
 size_mb="$(awk -v b="$size" 'BEGIN { printf "%.1f", b / 1000000 }')"
-if [[ ! "$max_mb" =~ ^[0-9]+$ ]]; then
+if [[ "$size_arch" != amd64 ]]; then
+    ok "runtime image is ${size_mb} MB on ${size_arch} (the ${max_mb:-?} MB ceiling applies to amd64 only)"
+elif [[ ! "$max_mb" =~ ^[0-9]+$ ]]; then
     bad "versions.json has no max_size_mb for line ${line}"
 elif (( size <= max_mb * 1000000 )); then
     ok "runtime image is ${size_mb} MB (ceiling ${max_mb} MB for ${line})"
