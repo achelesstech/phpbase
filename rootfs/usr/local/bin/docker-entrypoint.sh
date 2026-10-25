@@ -6,7 +6,7 @@
 #      and recreate $HOME           /tmp/php-base/home      (/home/www-data links here)
 #   2. PHP ini overrides from env   /tmp/php-base/php/zz-runtime.ini
 #   3. FPM pool size + env          /tmp/php-base/fpm/zz-runtime.conf
-#   4. nginx http{} settings        /tmp/php-base/nginx/http.d/10-php-base.conf
+#   4. nginx settings               /tmp/php-base/nginx/{main,http}.d/10-php-base.conf
 #   5. s6 scan directory (web role) /tmp/php-base/s6/scan
 #   6. Application hooks            /docker-entrypoint.d/*.sh
 #   7. Validate (web role only), then exec CMD
@@ -45,7 +45,7 @@ reset_runtime() {
     find "$RUNTIME" -mindepth 1 -delete 2>/dev/null \
         || die "could not clean ${RUNTIME} (files owned by another uid?)"
 
-    mkdir -p "$RUNTIME/php" "$RUNTIME/fpm" "$RUNTIME/nginx/http.d" \
+    mkdir -p "$RUNTIME/php" "$RUNTIME/fpm" "$RUNTIME/nginx/main.d" "$RUNTIME/nginx/http.d" \
              "$RUNTIME/nginx/tmp/client-body" "$RUNTIME/nginx/tmp/proxy" \
              "$RUNTIME/nginx/tmp/fastcgi" "$RUNTIME/nginx/tmp/uwsgi" \
              "$RUNTIME/nginx/tmp/scgi"
@@ -281,8 +281,18 @@ render_fpm() {
     [ "$n" -eq 0 ] || log "applied ${n} PHP-FPM pool override(s)"
 }
 
-# ── 4. nginx http{} settings ─────────────────────────────────────────────────
+# ── 4. nginx settings ────────────────────────────────────────────────────────
 render_nginx() {
+    # Main context. 2 rather than auto: auto is one per host CPU, not per CPU
+    # the container may use, and each worker holds its own open_file_cache.
+    workers="${NGINX_WORKER_PROCESSES:-2}"
+    case "$workers" in
+        auto) ;;
+        ''|*[!0-9]*|0*) die "NGINX_WORKER_PROCESSES must be a whole number of at least 1, or auto, got '${workers}'" ;;
+    esac
+    printf '%s\n' "# Rendered by docker-entrypoint.sh — do not edit; change the env instead." \
+        "worker_processes ${workers};" > "$RUNTIME/nginx/main.d/10-php-base.conf"
+
     out="$RUNTIME/nginx/http.d/10-php-base.conf"
 
     # Follow PHP's EFFECTIVE post_max_size (baked ini + overrides) unless set
@@ -299,6 +309,16 @@ render_nginx() {
     if [ "${NGINX_REAL_IP_FROM+set}" = set ]; then from="$NGINX_REAL_IP_FROM"; else from="10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 fc00::/7"; fi
     cloudflare="${NGINX_TRUST_CLOUDFLARE:-1}"
 
+    # Keep PHP max_execution_time <= FPM_REQUEST_TERMINATE_TIMEOUT <= this <=
+    # Traefik's readTimeout, so the innermost layer gives up first. Zero would
+    # fail every slow request at once.
+    read_timeout="${NGINX_FASTCGI_READ_TIMEOUT:-300s}"
+    printf '%s' "$read_timeout" | grep -qE '^0*[1-9][0-9]*[smh]?$' \
+        || die "NGINX_FASTCGI_READ_TIMEOUT must be a number above 0 with an optional s, m or h suffix (e.g. 600s), got '${read_timeout}'"
+
+    gzip="${NGINX_GZIP:-0}"
+    case "$gzip" in 0|1) ;; *) die "NGINX_GZIP must be 0 or 1, got '${gzip}'" ;; esac
+
     {
         echo "# Rendered by docker-entrypoint.sh — do not edit; change the env instead."
         echo "client_max_body_size ${body};"
@@ -314,12 +334,24 @@ render_nginx() {
             # visitor "is" a Cloudflare IP (rate limits, logs, IP bans).
             [ "$cloudflare" != 1 ] || echo "include /etc/nginx/php-base/cloudflare-real-ip.conf;"
         fi
-        case "${NGINX_ACCESS_LOG:-main}" in
+        echo "fastcgi_read_timeout ${read_timeout};"
+        # Off by default: Traefik already logs every request.
+        case "${NGINX_ACCESS_LOG:-off}" in
             main) echo "access_log /dev/stdout main;" ;;
             json) echo "access_log /dev/stdout json;" ;;
             off)  echo "access_log off;" ;;
             *)    die "NGINX_ACCESS_LOG must be main, json or off" ;;
         esac
+        # Off by default: Traefik compresses, and compressing twice wastes CPU.
+        # gzip_vary and gzip_proxied are in nginx.conf (gzip_static uses them).
+        if [ "$gzip" = 1 ]; then
+            echo "gzip            on;"
+            echo "gzip_comp_level 5;"
+            echo "gzip_min_length 256;"
+            echo "gzip_types text/plain text/css text/xml text/javascript"
+            echo "    application/javascript application/json application/xml application/xml+rss"
+            echo "    application/atom+xml application/manifest+json image/svg+xml font/woff2;"
+        fi
     } > "$out"
 }
 

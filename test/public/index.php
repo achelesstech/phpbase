@@ -45,6 +45,8 @@ $out = [
     'https_value'           => var_export($_SERVER['HTTPS'] ?? null, true),
     // With real_ip configured: the CLIENT from X-Forwarded-For, not the proxy.
     'remote_addr'           => $_SERVER['REMOTE_ADDR'] ?? 'unset',
+    // Behind Traefik: the client-facing port from X-Forwarded-Port.
+    'server_port'           => $_SERVER['SERVER_PORT'] ?? 'unset',
 
     'hook_ran'              => file_exists('/tmp/fixture-hook-ran') ? 'yes' : 'no',
     'pwned'                 => function_exists('pwned') ? 'yes' : 'no',

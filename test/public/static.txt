@@ -1,0 +1,1 @@
+php-base gzip_static fixture: this is the uncompressed static.txt

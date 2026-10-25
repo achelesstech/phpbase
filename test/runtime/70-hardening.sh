@@ -16,7 +16,8 @@ home_stat="$(docker exec "$APP" stat -c '%a %U:%G' /tmp/php-base/home)"
 [[ "$home_stat" == "750 www-data:www-data" ]] && ok "/tmp/php-base/home is 750 www-data:www-data" || bad "/tmp/php-base/home is '${home_stat}'"
 check "nginx writes no log files into the writable layer" docker exec "$APP" sh -c 'test ! -s /var/log/nginx/access.log && test ! -s /var/log/nginx/error.log'
 if grep -qE <<<"$(docker logs "$APP" 2>&1)" 'could not open error log|\[emerg\]|\[alert\]'; then bad "nginx alert/emerg at startup"; else ok "no nginx alerts at startup"; fi
-grep -q <<<"$(docker logs "$APP" 2>&1)" 'GET / ' && ok "nginx access log reaches stdout" || bad "no access log on stdout"
+# Traefik logs every request; NGINX_ACCESS_LOG=main|json turns nginx's on (55-nginx.sh).
+if grep -q <<<"$(docker logs "$APP" 2>&1)" '"GET / '; then bad "nginx access log is on by default"; else ok "nginx access log is off by default"; fi
 
 # PHP-FPM's socket is the only one: nothing else under /tmp accepts connections.
 tmp_sockets="$(docker exec "$APP" find /tmp -type s 2>&1 || true)"
