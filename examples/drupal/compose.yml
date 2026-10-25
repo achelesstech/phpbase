@@ -1,18 +1,14 @@
 # =============================================================================
 # Local development — Drupal 11
 # =============================================================================
-#   docker compose up -d          → http://localhost:8080
-#   docker compose run --rm drush status
+#   docker compose up -d --build
+#   docker compose exec app composer install
+#   docker compose exec app vendor/bin/drush site:install standard -y
+#
+# http://localhost:8080. The source is bind-mounted and OPcache re-checks file
+# times, so edits show up without a rebuild. Xdebug is loaded but off:
+#   XDEBUG_MODE=debug docker compose up -d
 # =============================================================================
-
-x-dev-env: &dev-env
-  env_file: .env
-  environment:
-    PHP_SESSION_COOKIE_SECURE: "0"
-    PHP_OPCACHE_VALIDATE_TIMESTAMPS: "1"
-    PHP_DISPLAY_ERRORS: "On"
-    PHP_MEMORY_LIMIT: 512M
-    DRUPAL_REVERSE_PROXY: "false"
 
 services:
   app:
@@ -20,54 +16,40 @@ services:
       context: .
       target: dev
     ports:
-      - "8080:8080"
-    <<: *dev-env
-    volumes:
-      - ./:/var/www/html
-    depends_on:
-      db:
-        condition: service_healthy
-
-  drush:
-    build:
-      context: .
-      target: dev
-    entrypoint: ["./vendor/bin/drush"]
-    <<: *dev-env
-    volumes:
-      - ./:/var/www/html
-    depends_on:
-      db:
-        condition: service_healthy
-    healthcheck:
-      disable: true
-    profiles: [tools]
-
-  composer:
-    build:
-      context: .
-      target: dev
-    entrypoint: ["composer"]
+      - "127.0.0.1:8080:8080"
+    env_file:
+      - path: .env
+        required: false
     environment:
-      COMPOSER_MEMORY_LIMIT: "-1"
+      # trusted_host_patterns accepts this host name only.
+      APP_DOMAIN: localhost
+      DRUSH_OPTIONS_URI: http://localhost:8080
+      PHP_OPCACHE_VALIDATE_TIMESTAMPS: "1"
+      XDEBUG_MODE: ${XDEBUG_MODE:-off}
+      # Same fallbacks as the db service below; never use them in production.
+      DB_PASSWORD: ${DB_PASSWORD:-drupal}
+      DRUPAL_HASH_SALT: ${DRUPAL_HASH_SALT:-local-development-only}
+    # Lets Xdebug reach the IDE on the host (Linux).
+    extra_hosts:
+      - host.docker.internal:host-gateway
     volumes:
       - ./:/var/www/html
-    healthcheck:
-      disable: true
-    profiles: [tools]
+      # The same env-driven settings.php the production image bakes in.
+      - ./docker/settings.php:/var/www/html/web/sites/default/settings.php:ro
+    depends_on:
+      db:
+        condition: service_healthy
 
   db:
-    image: postgres:16-alpine
+    image: docker.io/library/postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
     environment:
-      POSTGRES_DB:       ${DRUPAL_DB_NAME:-drupal}
-      POSTGRES_USER:     ${DRUPAL_DB_USER:-drupal}
-      POSTGRES_PASSWORD: ${DRUPAL_DB_PASSWORD:-drupal}
-    ports:
-      - "5433:5432"
+      POSTGRES_DB: ${DB_DATABASE:-drupal}
+      POSTGRES_USER: ${DB_USERNAME:-drupal}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-drupal}
     volumes:
-      - db-data:/var/lib/postgresql/data
+      - db-data:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DRUPAL_DB_USER:-drupal} -d ${DRUPAL_DB_NAME:-drupal}"]
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 5s
       timeout: 5s
       retries: 10

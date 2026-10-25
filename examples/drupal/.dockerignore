@@ -1,22 +1,33 @@
+# Keep the build context small and secrets out of it.
 .git
 .github
 .gitignore
 .env
 .env.*
-!.env.example
+auth.json
 
+# Installed from composer.lock in the image: vendor/ and what Composer and the
+# Drupal scaffold write under web/.
 vendor
+web/core
+web/modules/contrib
+web/themes/contrib
+web/profiles/contrib
+web/libraries
+
+# Runtime state, and settings the image does not take from the repository
+# (docker/settings.php is baked in instead).
+web/sites/*/files
+web/sites/*/settings.php
+web/sites/*/settings.local.php
+private
+
 node_modules
 
-web/sites/default/files
-web/sites/*/files
-web/sites/default/settings.local.php
-
 compose*.yml
-docker-compose*.yml
 Dockerfile
+renovate.json
 *.md
-!README.md
 
 .idea
 .vscode

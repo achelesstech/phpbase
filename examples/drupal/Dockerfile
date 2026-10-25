@@ -1,80 +1,92 @@
 # =============================================================================
-# Drupal 11 — application image
+# Drupal 11 — application image on achelesstech/php-base
 # =============================================================================
-# Assumes a composer-managed project (drupal/recommended-project layout) where
-# the docroot is web/. Copy this file, .dockerignore, compose*.yml and docker/
-# into the app repo.
+# Copy this directory into the app repository (see README.md). The project is
+# composer-managed (drupal/recommended-project layout, docroot web/) and
+# requires drush/drush.
 #
-# Drupal 11 requires PHP >= 8.3. APCu is in the base image (it is the backing
-# store for Drupal's class loader and fast-bootstrap caches).
+#   vendor      composer install          (-dev base: Composer lives there)
+#   build       full source, autoloader
+#   production  root-owned code on the runtime base       <- compose.prod.yml
+#   dev         the -dev base, source bind-mounted         <- compose.yml
+#
+# Drupal 11 needs PHP >= 8.3. APCu is in the base (Drupal's class loader and
+# fast-bootstrap caches use it).
+#
+# Both bases are pinned by digest: `:8.4` alone changes the app image whenever
+# the base is rebuilt, and last week's build can no longer be reproduced.
+# README.md shows how to read the two digests; Renovate keeps them current.
+# A tag-only reference (--build-arg PHP_BASE_IMAGE=…:8.4) builds as well.
 # =============================================================================
 
-ARG BASE_IMAGE=docker.io/achelesstech/php-base:8.4
-FROM ${BASE_IMAGE} AS base
+ARG PHP_BASE_IMAGE=docker.io/achelesstech/php-base:8.4@sha256:<runtime>
+ARG PHP_BASE_DEV_IMAGE=docker.io/achelesstech/php-base:8.4-dev@sha256:<dev>
 
-ENV APP_ROOT=/var/www/html
+# =============================================================================
+# vendor — Composer dependencies and Drupal's scaffold files (web/index.php,
+# web/core, …), cached on the lockfile alone
+# =============================================================================
+FROM ${PHP_BASE_DEV_IMAGE} AS vendor
+
+# The base's APP_ROOT, spelled out for the relative paths below.
 WORKDIR /var/www/html
-
-# =============================================================================
-# deps
-# =============================================================================
-FROM base AS deps
-
-# COMPOSER_HOME is set to /tmp/composer by the base image, so composer works as
-# a non-root user with no home directory. Do not drop this.
 COPY --chown=www-data:www-data composer.json composer.lock ./
-RUN composer install \
-        --no-dev --no-interaction --no-progress \
-        --no-scripts --no-autoloader --prefer-dist
+# Scripts and plugins run: drupal/core-composer-scaffold writes web/ here.
+# --no-autoloader: the autoloader needs the full source, which arrives in
+# `build`.
+RUN composer install --no-dev --no-interaction --no-progress --prefer-dist --no-autoloader
 
 # =============================================================================
-# build
+# build — the project's own code (custom modules and themes, config/) and
+# the autoloader
 # =============================================================================
-FROM deps AS build
+FROM vendor AS build
 
 COPY --chown=www-data:www-data . .
-RUN composer dump-autoload --optimize --classmap-authoritative
 
-# Install Drush for real if the project doesn't already declare it.
-# `composer require --no-update` only edits composer.json and installs nothing.
-RUN if composer show drush/drush >/dev/null 2>&1; then \
-        echo "drush already required by the project"; \
-    else \
-        composer require drush/drush --no-interaction --no-progress --optimize-autoloader; \
-    fi
+# --optimize, never --classmap-authoritative: Drupal registers each module's
+# namespace at runtime, which an authoritative classmap would refuse.
+RUN set -eux; \
+    test -x vendor/bin/drush || { echo "drush/drush is missing: composer require drush/drush"; exit 1; }; \
+    composer dump-autoload --no-dev --optimize
 
 # =============================================================================
 # production
 # =============================================================================
-FROM base AS production
+FROM ${PHP_BASE_IMAGE} AS production
 
-COPY --from=build --chown=www-data:www-data /var/www/html /var/www/html
+# Code is ROOT-owned: a compromised PHP process cannot rewrite it, and the
+# env-driven settings.php (no secrets in it) is read-only with the rest.
+COPY --from=build --chown=root:root /var/www/html /var/www/html
+COPY docker/settings.php /var/www/html/web/sites/default/settings.php
 
 USER root
-# OS packages belong here, not in the base image: no compiler needed, and they
-# stay visibly attached to the app that requires them.
-RUN apk add --no-cache postgresql-client \
-    && rm -rf /var/www/html/.git /var/www/html/.github \
-    && rm -f  /var/www/html/.env
+# Only the two files directories belong to www-data. With read_only: true they
+# are the only writable paths at runtime (volumes); owning them here gives the
+# volumes www-data ownership when Docker first populates them.
+# config/sync must exist (empty until the first export is committed): with it
+# and the database settings in place, the installer accepts a read-only
+# settings.php. Its .htaccess is written here, by Drupal itself, because cron
+# checks for one and cannot write it at runtime.
+RUN set -eux; \
+    chown root:root /var/www/html; \
+    mkdir -p config/sync web/sites/default/files private; \
+    php -r 'require "vendor/autoload.php"; exit(Drupal\Component\FileSecurity\FileSecurity::writeHtaccess("config/sync") ? 0 : 1);'; \
+    chown www-data:www-data web/sites/default/files private; \
+    chmod 0555 web/sites/default; \
+    chmod 0444 web/sites/default/settings.php; \
+    ln -s /etc/nginx/presets/drupal.conf /etc/nginx/conf.d/default.conf; \
+    nginx-validate.sh
 USER www-data
 
-COPY --chown=www-data:www-data docker/vhost.conf    /etc/nginx/conf.d/vhost.conf
-COPY --chown=www-data:www-data docker/entrypoint.d/ /docker-entrypoint.d/
-
-RUN nginx-validate.sh
-
 # =============================================================================
-# dev
+# dev — the -dev base (Composer, Xdebug off until XDEBUG_MODE is set); the
+# source is bind-mounted by compose.yml
 # =============================================================================
-FROM base AS dev
+FROM ${PHP_BASE_DEV_IMAGE} AS dev
 
 USER root
-RUN apk add --no-cache --virtual .xdebug-deps $PHPIZE_DEPS \
-    && pecl install xdebug \
-    && docker-php-ext-enable xdebug \
-    && apk del .xdebug-deps \
-    && apk add --no-cache git postgresql-client
-
-COPY docker/vhost.conf    /etc/nginx/conf.d/vhost.conf
-COPY docker/entrypoint.d/ /docker-entrypoint.d/
+RUN set -eux; \
+    ln -s /etc/nginx/presets/drupal.conf /etc/nginx/conf.d/default.conf; \
+    nginx-validate.sh
 USER www-data
