@@ -1,93 +1,57 @@
 # =============================================================================
-# Local development — Moodle 5.2
+# Local development — Moodle 5.3 LTS
 # =============================================================================
 #   docker compose up -d --build
-#   docker compose --profile ops run --rm install
-#   → http://localhost:8080
+#   docker compose exec app php admin/cli/install_database.php --agree-license \
+#       --adminuser=admin --adminpass='Admin-dev-1!' --adminemail=admin@example.com \
+#       --fullname='Moodle dev' --shortname=dev
+#
+# http://localhost:8080. config.php is bind-mounted and OPcache re-checks file
+# times, so edits to it show up without a rebuild; so does a plugin you are
+# writing, bind-mounted into its place in public/ (see below). Xdebug is
+# loaded but off:
+#   XDEBUG_MODE=debug docker compose up -d
 # =============================================================================
-
-x-moodle-env: &moodle-env
-  environment:
-    MOODLE_DB_TYPE:     mariadb
-    MOODLE_DB_HOST:     db
-    MOODLE_DB_NAME:     moodle
-    MOODLE_DB_USER:     moodle
-    MOODLE_DB_PASSWORD: moodle
-    MOODLE_URL:         http://localhost:8080
-    MOODLE_SSLPROXY:    "false"
-    PHP_SESSION_COOKIE_SECURE: "0"
-    PHP_OPCACHE_VALIDATE_TIMESTAMPS: "1"
-    PHP_DISPLAY_ERRORS: "On"
-    PHP_MEMORY_LIMIT:   512M
 
 services:
   app:
     build:
       context: .
-      args:
-        MOODLE_BRANCH: "502"
+      target: dev
     ports:
-      - "8080:8080"
-    <<: *moodle-env
+      - "127.0.0.1:8080:8080"
+    environment:
+      MOODLE_WWWROOT: http://localhost:8080
+      DB_PASSWORD: moodle
+      PHP_OPCACHE_VALIDATE_TIMESTAMPS: "1"
+      # Plain HTTP locally: secure cookies would never come back.
+      PHP_SESSION_COOKIE_SECURE: "0"
+      PHP_MEMORY_LIMIT: 512M
+      XDEBUG_MODE: ${XDEBUG_MODE:-off}
+    # Lets Xdebug reach the IDE on the host (Linux).
+    extra_hosts:
+      - host.docker.internal:host-gateway
     volumes:
+      - ./docker/config.php:/var/www/html/config.php:ro
+      # - ./plugins/mod_example:/var/www/html/public/mod/example:ro
       - moodledata:/var/moodledata
     depends_on:
       db:
         condition: service_healthy
-
-  cron:
-    build:
-      context: .
-    command: ["/usr/local/bin/moodle-cron.sh"]
-    <<: *moodle-env
-    volumes:
-      - moodledata:/var/moodledata
-    depends_on:
-      db:
-        condition: service_healthy
-    healthcheck:
-      disable: true
-
-  install:
-    build:
-      context: .
-    <<: *moodle-env
-    command:
-      - /bin/sh
-      - -c
-      - |
-        CLI="$${APP_ROOT}/public/admin/cli"; [ -d "$$CLI" ] || CLI="$${APP_ROOT}/admin/cli"
-        php "$$CLI/install_database.php" --agree-license \
-          --adminuser=admin --adminpass=Admin123! \
-          --adminemail=admin@example.com \
-          --fullname="Moodle Dev" --shortname="dev"
-    volumes:
-      - moodledata:/var/moodledata
-    depends_on:
-      db:
-        condition: service_healthy
-    healthcheck:
-      disable: true
-    profiles: [ops]
 
   db:
-    image: mariadb:11.4
+    image: docker.io/library/postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
     environment:
-      MARIADB_DATABASE:             moodle
-      MARIADB_USER:                 moodle
-      MARIADB_PASSWORD:             moodle
-      MARIADB_RANDOM_ROOT_PASSWORD: "yes"
-    command:
-      - --innodb_file_per_table=1
-      - --character-set-server=utf8mb4
-      - --collation-server=utf8mb4_unicode_ci
+      POSTGRES_DB: moodle
+      POSTGRES_USER: moodle
+      POSTGRES_PASSWORD: moodle
     volumes:
-      - db-data:/var/lib/mysql
+      - db-data:/var/lib/postgresql
     healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 5s
       timeout: 5s
-      retries: 20
+      retries: 10
 
 volumes:
   moodledata:

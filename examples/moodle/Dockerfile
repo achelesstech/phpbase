@@ -1,82 +1,110 @@
+# syntax=docker/dockerfile:1
+# (the ${VAR#…}/${VAR%…} modifiers below need a current Dockerfile frontend,
+# not whatever version the builder happens to bundle)
 # =============================================================================
-# Moodle 5.2 — application image
+# Moodle 5.3 LTS — application image on achelesstech/php-base
 # =============================================================================
-# Unlike Laravel/Drupal, Moodle is not "your" repo — the code is an upstream
-# tarball. So this is a DEPLOYMENT repo: one per Moodle site, or one per major
-# version that you deploy.
+# A DEPLOYMENT repo (see README.md): Moodle is the upstream release tarball,
+# downloaded at build. The repository holds this directory, config.php and
+# whatever plugins the site adds.
 #
-# ── Moving to 5.3 LTS (October) ──────────────────────────────────────────────
-# Copy this directory to moodle53 and change MOODLE_BRANCH to 503. Nothing else
-# should need editing: the docroot layout is DETECTED at build time by
-# select-vhost.sh rather than hardcoded, because the public/ restructure is
-# exactly the kind of per-release detail that goes stale in a Dockerfile.
-# Check the build log — it prints which layout it found and which vhost it
-# installed — and run `moodle-doctor.sh` in the container afterwards.
+#   source      release tarball + composer install   (-dev base: Composer)
+#   production  root-owned code on the runtime base   <- compose.prod.yml
+#   dev         the same tree on the -dev base        <- compose.yml
+#
+# Both bases are pinned by digest: `:8.4` alone changes the app image whenever
+# the base is rebuilt, and last week's build can no longer be reproduced.
+# README.md shows how to read the two digests; Renovate keeps them current.
+# A tag-only reference (--build-arg PHP_BASE_IMAGE=…:8.4) builds as well.
 # =============================================================================
 
-ARG BASE_IMAGE=docker.io/achelesstech/php-base:8.4
-FROM ${BASE_IMAGE} AS moodle
+ARG PHP_BASE_IMAGE=docker.io/achelesstech/php-base:8.4@sha256:<runtime>
+ARG PHP_BASE_DEV_IMAGE=docker.io/achelesstech/php-base:8.4-dev@sha256:<dev>
 
-# 503 = 5.3.x (LTS, Oct 2026)   502 = 5.2.x   501 = 5.1.x   500 = 5.0.x
-ARG MOODLE_BRANCH=502
+# =============================================================================
+# source — the Moodle tree with its Composer dependencies
+# =============================================================================
+FROM ${PHP_BASE_DEV_IMAGE} AS source
 
-ENV APP_ROOT=/var/www/html \
-    MOODLE_DATAROOT=/var/moodledata
+# The Moodle branch. MOODLE_503_STABLE is 5.3 LTS; MOODLE_502_STABLE is 5.2.
+# Both use the public/ layout the moodle.conf preset serves (5.1+).
+ARG MOODLE_BRANCH=MOODLE_503_STABLE
+# MOODLE_503_STABLE -> 503: the packaging server's name for the branch.
+ARG MOODLE_PKG=${MOODLE_BRANCH#MOODLE_}
 
-USER root
+# The base's APP_ROOT, spelled out for the relative paths below.
 WORKDIR /var/www/html
-
-# OS packages Moodle shells out to. Plain binaries, no compiler — so they live
-# here rather than bloating the shared base.
-#   ghostscript  PDF annotation / assignment feedback
-#   graphviz     admin dependency graphs
-#   *-client     backups and CLI debugging
-RUN apk add --no-cache ghostscript graphviz mariadb-client postgresql-client
-
-# ── Moodle source ────────────────────────────────────────────────────────────
-RUN set -eux; \
-    curl -fsSL "https://packaging.moodle.org/stable${MOODLE_BRANCH}/moodle-latest-${MOODLE_BRANCH}.tgz" \
-        | tar xz --strip-components=1 -C /var/www/html; \
-    chown -R www-data:www-data /var/www/html
-
-# ── Composer dependencies ────────────────────────────────────────────────────
-# Mandatory from 5.1: the release tarball no longer ships a complete vendor/
-# tree and the environment check fails without it. Harmless on older branches
-# that do ship one.
-USER www-data
-RUN set -eux; \
-    if [ -f composer.json ]; then \
-        composer install --no-dev --classmap-authoritative \
-                         --no-interaction --no-progress; \
-    else \
-        echo "no composer.json in this branch — skipping"; \
-    fi
+# The newest weekly build of the branch. ADD, not `curl | tar`: BuildKit
+# checks the URL on every build and reuses the cached layer only while the
+# tarball is unchanged, so a rebuild picks up Moodle's weekly fixes.
+# Integrity rests on HTTPS to packaging.moodle.org: a weekly build that moves
+# cannot be pinned by checksum. To pin, point the URL at one fixed release
+# file instead and add `--checksum=sha256:<hash>` to this ADD.
+ADD --chown=www-data:www-data \
+    https://packaging.moodle.org/stable${MOODLE_PKG%_STABLE}/moodle-latest-${MOODLE_PKG%_STABLE}.tgz \
+    /tmp/moodle.tgz
 USER root
-RUN rm -rf /tmp/composer
+RUN set -eux; \
+    tar xzf /tmp/moodle.tgz --strip-components=1 -C /var/www/html; \
+    rm /tmp/moodle.tgz; \
+    chown -R www-data:www-data /var/www/html
+USER www-data
+# 5.1+ tarballs ship no complete vendor/; Moodle's environment check fails
+# without it.
+RUN composer install --no-dev --classmap-authoritative --no-interaction --no-progress
 
-# ── moodledata — must live OUTSIDE the install root ──────────────────────────
-RUN mkdir -p "${MOODLE_DATAROOT}" \
-    && chown -R www-data:www-data "${MOODLE_DATAROOT}"
+# Plugins kept in this repository go here, e.g.
+#   COPY --chown=www-data:www-data plugins/mod_example/ public/mod/example/
 
-# ── vhost: detected, not assumed ─────────────────────────────────────────────
-COPY docker/vhost-public.conf docker/vhost-legacy.conf /tmp/vhosts/
-COPY docker/select-vhost.sh   /usr/local/bin/select-vhost.sh
-RUN chmod +x /usr/local/bin/select-vhost.sh \
-    && select-vhost.sh "${APP_ROOT}" /tmp/vhosts \
-    && rm -rf /tmp/vhosts \
-    && chown www-data:www-data /etc/nginx/conf.d/vhost.conf
+# =============================================================================
+# production
+# =============================================================================
+FROM ${PHP_BASE_IMAGE} AS production
 
-COPY --chown=www-data:www-data docker/entrypoint.d/ /docker-entrypoint.d/
-COPY docker/moodle-cron.sh   /usr/local/bin/moodle-cron.sh
-COPY docker/moodle-doctor.sh /usr/local/bin/moodle-doctor.sh
-RUN chmod +x /docker-entrypoint.d/*.sh \
-             /usr/local/bin/moodle-cron.sh \
-             /usr/local/bin/moodle-doctor.sh
+# Code is ROOT-owned: a compromised PHP process cannot rewrite it, and plugins
+# are installed through this file, not the web UI ($CFG->disableupdateautodeploy).
+COPY --from=source --chown=root:root /var/www/html /var/www/html
+COPY --chown=root:root docker/config.php /var/www/html/config.php
 
-RUN nginx-validate.sh
-
+USER root
+# ghostscript: PDF annotation in assignment feedback ($CFG->pathtogs).
+# moodledata is the one writable path besides /tmp; owning it here gives the
+# volume www-data ownership when Docker first populates it.
+RUN set -eux; \
+    chown root:root /var/www/html; \
+    apk add --no-cache ghostscript; \
+    install -d -o www-data -g www-data -m 0750 /var/moodledata; \
+    php -l config.php; \
+    ln -s /etc/nginx/presets/moodle.conf /etc/nginx/conf.d/default.conf; \
+    nginx-validate.sh
 USER www-data
 
-# NOTE: no VOLUME instruction. It would create a stray anonymous volume on
-# every `docker run` and make the path immutable to later build stages.
-# Mount moodledata from compose instead.
+# Long admin pages, backups and restores: all three timeouts at 600 s (the
+# base defaults are 120 s for PHP, 300 s for FPM and nginx).
+ENV PHP_MAX_EXECUTION_TIME=600 \
+    NGINX_FASTCGI_READ_TIMEOUT=600s \
+    FPM_REQUEST_TERMINATE_TIMEOUT=600s
+
+# =============================================================================
+# dev — the -dev base (Composer, Xdebug off until XDEBUG_MODE is set) with the
+# same Moodle tree; compose.yml bind-mounts config.php
+# =============================================================================
+# Keep the COPY, RUN and ENV below in sync with `production` (only php -l is
+# left out: config.php is bind-mounted and edited here).
+FROM ${PHP_BASE_DEV_IMAGE} AS dev
+
+COPY --from=source --chown=root:root /var/www/html /var/www/html
+COPY --chown=root:root docker/config.php /var/www/html/config.php
+
+USER root
+RUN set -eux; \
+    chown root:root /var/www/html; \
+    apk add --no-cache ghostscript; \
+    install -d -o www-data -g www-data -m 0750 /var/moodledata; \
+    ln -s /etc/nginx/presets/moodle.conf /etc/nginx/conf.d/default.conf; \
+    nginx-validate.sh
+USER www-data
+
+ENV PHP_MAX_EXECUTION_TIME=600 \
+    NGINX_FASTCGI_READ_TIMEOUT=600s \
+    FPM_REQUEST_TERMINATE_TIMEOUT=600s

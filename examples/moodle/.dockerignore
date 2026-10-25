@@ -1,4 +1,5 @@
-# Moodle source is downloaded during the build, so the context only needs
-# docker/. Everything else is noise.
+# Moodle is downloaded during the build: the context needs only docker/ (and
+# plugins/, if the Dockerfile copies plugins kept in this repository).
 *
 !docker/
+!plugins/
