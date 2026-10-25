@@ -1,7 +1,14 @@
 # Documentation
 
-The image itself is described in the [repository README](../README.md). The
+The [repository README](../README.md) has the tags and a quick start. The
 copy-to-start examples are in [`examples/`](../examples/).
+
+## The image
+
+| Document | What it covers |
+|---|---|
+| [`image.md`](image.md) | contents, the runtime contract, roles, presets, the healthcheck, every environment variable, tuning |
+| [`security.md`](security.md) | threat model, the hardened run flags, what the tests prove, the ImageMagick policy and how to ship your own |
 
 ## Running it
 

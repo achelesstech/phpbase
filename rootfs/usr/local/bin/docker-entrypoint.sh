@@ -15,7 +15,7 @@
 # written, so a read-only root filesystem works with a single tmpfs:
 #
 #     read_only: true
-#     tmpfs: [/tmp]
+#     tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=256m"]
 #
 # /tmp rather than /run: Docker mounts a /run tmpfs as root:root 0755, which
 # a non-root entrypoint cannot write, while /tmp gets 1777.

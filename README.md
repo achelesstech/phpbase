@@ -1,237 +1,180 @@
 # achelesstech/php-base
 
-One PHP runtime image. **PHP-FPM + Nginx + Supervisor**, non-root, designed to
-sit behind a TLS-terminating reverse proxy (Traefik).
+A PHP base image: **PHP-FPM and nginx on Alpine, supervised by s6**, non-root,
+built to sit behind a TLS-terminating reverse proxy (Traefik, optionally with
+Cloudflare in front). One image serves Laravel 12/13, Drupal 11, WordPress and
+Moodle 5.1–5.3.
 
 ```
-Traefik (TLS) ──► :8080 ┌─────────────────────────────────────────┐
-                        │ nginx ──► php-fpm    supervisor          │
-                        │ vhost supplied by the APPLICATION image  │
-                        │ hooks: /docker-entrypoint.d/*.sh         │
-                        │ tini PID 1 · www-data 1000:1000          │
-                        └─────────────────────────────────────────┘
+Traefik (TLS) ──► :8080 ┌──────────────────────────────────────────────────┐
+                        │ nginx ──unix socket──► php-fpm        (s6)        │
+                        │ server{} from a preset or the app image            │
+                        │ status pages on 127.0.0.1:8081 only                │
+                        │ tini PID 1 · every process www-data 1000:1000      │
+                        │ writes only under /tmp                             │
+                        └──────────────────────────────────────────────────┘
 ```
+
+Published as `docker.io/achelesstech/php-base`. CI rebuilds it from the newest
+PHP patch release and the newest Alpine packages, tests every build under the
+production run flags and against real installs of all four frameworks, and
+publishes only the digest it tested.
 
 ## The one rule
 
 **This image is deliberately boring.** It has no platform identity and no
-feature toggles. There is no `php-base:laravel`, no `INSTALL_LDAP`, no
-`NGINX_PROFILE`. Every application gets the same fixed payload.
-
-That is the whole design. The previous revision was one Dockerfile with 42
-build args producing seven differently-named "base" images; the configurability
-*was* the complexity, and it hid real bugs (a build arg that had never done
-anything, a uid/gid that was silently wrong).
+feature toggles: there is no `php-base:laravel`, no `INSTALL_LDAP`. Every
+application gets the same fixed set of extensions, and the differences live
+where they belong:
 
 | | Where it lives | Why |
 |---|---|---|
-| Compiled PHP extensions | **base** (union of all apps) | Slow: needs `$PHPIZE_DEPS` and a compiler. ~40MB more than a minimal set, shared by every app on the host. |
-| OS packages (`ghostscript`, `graphviz`, DB clients) | **app image** | `apk add` takes seconds and needs no compiler. Keeps them attached to the app that needs them. |
-| nginx `http{}` block | **base** | Genuinely common. |
-| nginx `server{}` block | **app image** | Every app's routing is different, and it belongs next to the code it serves. |
-| Numbers (memory, pool size, timeouts) | **runtime env** | These change per deployment, not per build. |
-
-## Using it
-
-```dockerfile
-# Pin by digest. A moving tag means your app image changes silently
-# and last week's build is not reproducible.
-FROM docker.io/achelesstech/php-base:8.4@sha256:...
-
-COPY docker/vhost.conf    /etc/nginx/conf.d/vhost.conf
-COPY docker/entrypoint.d/ /docker-entrypoint.d/
-COPY --chown=www-data:www-data . /var/www/html
-
-RUN nginx-validate.sh   # fail the build, not production
-```
-
-Use `nginx-validate.sh`, **not** a bare `nginx -t`. `nginx -t` creates the pid
-file and opens its compiled-in default error log as a side effect; when the
-build step runs as root that bakes root-owned files into the image and nginx
-then cannot start as www-data at runtime. The wrapper cleans up after itself.
-
-Working templates for Laravel 13, Drupal 11, Moodle 5.2 and WordPress
-are in [`examples/`](examples/). Copy one into the application repository.
-
-**Behind Traefik and Cloudflare?** Read
-[`docs/reverse-proxy.md`](docs/reverse-proxy.md) before going live. A complete,
-hardened Traefik deployment — static config, dynamic config, compose — is in
-[`examples/traefik/`](examples/traefik/), and the labels reference for app
-repos is [`docs/traefik/labels.md`](docs/traefik/labels.md). It lives here
-temporarily and will move to its own repository; nothing in this image depends
-on it.
-
-### Two requirements on the application image
-
-1. **Provide `/etc/nginx/conf.d/vhost.conf`** with exactly one `server{}` block
-   listening on `8080`.
-2. **That vhost must define `/fpm-ping`** on `127.0.0.1` — the image
-   `HEALTHCHECK` uses it. Copy the block from any template in `examples/`.
+| Compiled PHP extensions | **base** (the union all four frameworks need) | Compiling needs a toolchain and is slow; shared by every app on the host |
+| OS packages (`ghostscript`, DB clients, `nodejs`) | **app image** | `apk add` takes seconds and needs no compiler; keeps them next to the app that needs them |
+| nginx `http{}` block | **base** | Genuinely common |
+| nginx `server{}` block | **app image**: a preset symlink or its own vhost | Every app routes differently |
+| Numbers (memory, pool size, timeouts) | **runtime env** | They change per deployment, not per build |
 
 ## Tags
 
-| Tag | PHP | Status |
-|---|---|---|
-| `8.4` | 8.4 | current |
-| `8.2` | 8.2 | migration bridge — **security support ends 2026-12-31** |
-
-Published to **Docker Hub** as `docker.io/achelesstech/php-base`. Rebuilt weekly
-by CI so Alpine and PHP patch releases land without anyone remembering. Renovate
-then opens digest-bump PRs in the app repos.
-
-CI needs two repository secrets to push:
-
-| Secret | Value |
+| Tag | What it is |
 |---|---|
-| `DOCKERHUB_USERNAME` | Docker Hub account with write access to `achelesstech` |
-| `DOCKERHUB_TOKEN` | Access token from Docker Hub → Account Settings → Personal access tokens, scope **Read & Write** |
+| `achelesstech/php-base:8.4` | the newest build of the 8.4 line. Moves with every rebuild: **pin it by digest** |
+| `achelesstech/php-base:8.4.27` | the newest build of PHP 8.4.27. Moves when Alpine packages are rebuilt |
+| `achelesstech/php-base:8.4.27-20261026` | one build. Never moves. A second build on the same day gets `…-20261026.2` |
+| `achelesstech/php-base:8.4-dev` | the `-dev` twin of `:8.4`; every tag above has one (`:8.4.27-dev`, …) |
+| `achelesstech/php-base:latest` | the newest stable line (8.5); `:latest-dev` is its twin. Not for production |
+| `achelesstech/php-base:8.6-rc` | the pre-release canary, published only when it builds and passes; `:8.6-rc-dev` |
 
-Use an access token, never the account password — a token is scoped and can be
-revoked on its own. The same two secrets are expected by every app repo built
-from [`examples/`](examples/). Pull is anonymous; nothing needs a login to
-consume the image, though authenticated pulls get a higher rate limit.
+Stable lines are 8.2, 8.3, 8.4 and 8.5. **PHP 8.2's security support ends
+2026-12-31**; CI stops building it after that date. There are no
+`8.4-alpine3.24`-style tags any more: a tag pinned to one Alpine release stops
+receiving PHP updates when upstream moves on, which is how v1 sat on an old
+PHP for eleven months.
 
-## What's inside
+The runtime image is for production. The `-dev` image adds Composer, git,
+unzip, patch, openssh-client, Xdebug and PCOV (both off), PHP sources,
+headers, `phpize` and the `docker-php-ext-*` helpers. Use it for local
+development and as the `composer install` build stage.
 
-**Extensions** — the union across Laravel, Drupal, Moodle, WordPress and Symfony:
+Images are signed with cosign (keyless) and carry an SBOM and provenance.
+[`docs/docker-hub.md`](docs/docker-hub.md) shows `cosign verify`.
 
+## Quick start
+
+```dockerfile
+# Pin by digest; a moving tag makes last week's build unreproducible.
+#   docker buildx imagetools inspect docker.io/achelesstech/php-base:8.4
+FROM docker.io/achelesstech/php-base:8.4@sha256:<runtime digest>
+
+USER root
+# Code stays root-owned (COPY's default): a compromised PHP process cannot
+# rewrite it.
+COPY . /var/www/html
+# The framework's preset; pick yours from /etc/nginx/presets/.
+RUN ln -s /etc/nginx/presets/laravel.conf /etc/nginx/conf.d/default.conf \
+ && php-base-validate
+USER www-data
 ```
-apcu  bcmath  exif  gd  imagick  intl  ldap  mysqli  opcache  pcntl
-pdo_mysql  pdo_pgsql  pgsql  redis  soap  zip
+
+This is the part every framework shares. Under `--read-only`, every path the
+app writes at runtime (caches, logs, uploads, sessions) needs a volume or a
+tmpfs; owning it as `www-data` in the image is not enough. Dependencies are
+installed in a `-dev` build stage, because Composer is only in `-dev`. The
+app templates in [`examples/laravel/`](examples/laravel/),
+[`examples/drupal/`](examples/drupal/),
+[`examples/wordpress/`](examples/wordpress/) and
+[`examples/moodle/`](examples/moodle/) are complete, tested patterns for both.
+
+Run it the way production does (these are the flags the test suite uses):
+
+```sh
+docker run --rm -p 8080:8080 \
+  --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=256m --cap-drop ALL \
+  --security-opt no-new-privileges --pids-limit 256 --memory 1g \
+  my-app
 ```
 
-Plus everything the upstream `php:*-fpm-alpine` image already enables
-(`mbstring`, `curl`, `xml`, `dom`, `sodium`, `openssl`, `sqlite3`, …), which is
-why they are not recompiled here.
+The same image runs the queue worker and the scheduler with a different
+command:
 
-Xdebug and PCOV are **not** included. They were the only reason
-`/usr/local/etc/php/conf.d` had to be writable by the runtime user. Add them in
-a `dev` build stage in the app repo instead — see `examples/laravel/Dockerfile`.
+```yaml
+queue:     { command: [php, artisan, queue:work, --max-time=3600] }
+scheduler: { command: [php-base-every, "60", php, artisan, schedule:run] }
+```
 
-**Also present:** nginx, supervisor, tini, curl, composer 2.8.
+### What the application image must provide
 
-**Deliberately absent:** `mariadb-client`, `postgresql-client`, `nodejs`. Add
-them in the app image where they are needed.
+1. **One `server{}` block listening on 8080** in `/etc/nginx/conf.d/`: a
+   symlink to a preset in `/etc/nginx/presets/` (`laravel.conf`,
+   `drupal.conf`, `wordpress.conf`, `moodle.conf`, `moodle-legacy.conf`), or
+   its own vhost.
+2. **`RUN php-base-validate`** after it (`nginx-validate.sh` is the same
+   command), so a broken config fails the build rather than production.
 
-## Runtime configuration
+Nothing else. The health and status pages (`/fpm-ping`, `/fpm-status`,
+`/nginx-status`) are part of the image, on `127.0.0.1:8081`, so a vhost does
+not define them.
 
-Everything numeric is an env var. The entrypoint renders PHP settings into
-`/etc/php-runtime.d/zz-runtime.ini` (second entry in `PHP_INI_SCAN_DIR`, so it
-wins) and pool settings into `php-fpm.d/zz-runtime.conf`.
+Working app templates for Laravel, Drupal, WordPress and Moodle are in
+[`examples/`](examples/). Copy an app template into the application
+repository.
 
-### PHP
+**Behind Traefik and Cloudflare?** Read
+[`docs/reverse-proxy.md`](docs/reverse-proxy.md) before going live. A
+hardened Traefik deployment is in [`examples/traefik/`](examples/traefik/),
+and Portainer behind it in [`examples/portainer/`](examples/portainer/).
 
-| Env | Default |
+## Documentation
+
+| Document | What it covers |
 |---|---|
-| `PHP_MEMORY_LIMIT` | `256M` |
-| `PHP_UPLOAD_MAX_FILESIZE` / `PHP_POST_MAX_SIZE` | `64M` |
-| `PHP_MAX_EXECUTION_TIME` / `PHP_MAX_INPUT_TIME` | `120` |
-| `PHP_MAX_INPUT_VARS` | `5000` |
-| `PHP_DATE_TIMEZONE` | `UTC` |
-| `PHP_DISPLAY_ERRORS` | `Off` |
-| `PHP_ERROR_REPORTING` | — |
-| `PHP_SESSION_COOKIE_SECURE` | `1` — set `0` for plain-HTTP local dev |
-| `PHP_SESSION_SAVE_HANDLER` / `PHP_SESSION_SAVE_PATH` | disk — **set to Redis before scaling past one replica** |
-| `PHP_OPCACHE_ENABLE` | `1` |
-| `PHP_OPCACHE_MEMORY` | `192` |
-| `PHP_OPCACHE_MAX_FILES` | `20000` |
-| `PHP_OPCACHE_VALIDATE_TIMESTAMPS` | `0` — set `1` for dev |
-
-OPcache **JIT is off**. It gives close to nothing on request-scoped CMS
-workloads, costs RSS per pool, and has a history of segfaults under FPM. Turn
-it on per-app only with a benchmark behind it.
-
-### PHP-FPM pool
-
-| Env | Default |
-|---|---|
-| `FPM_PM` | `dynamic` |
-| `FPM_MAX_CHILDREN` | `12` |
-| `FPM_START_SERVERS` | `3` |
-| `FPM_MIN_SPARE_SERVERS` / `FPM_MAX_SPARE_SERVERS` | `2` / `5` |
-| `FPM_MAX_REQUESTS` | `500` |
-| `FPM_PROCESS_IDLE_TIMEOUT` | `10s` |
-| `FPM_REQUEST_TERMINATE_TIMEOUT` | — |
-| `FPM_SLOWLOG_TIMEOUT` | — |
-
-Sizing: `max_children ≈ (container memory − 128M) / average request RSS`.
-Measure the average from `/fpm-status` rather than guessing.
-
-## Operational behaviour
-
-**Health.** `HEALTHCHECK` curls `/fpm-ping`, which goes through FastCGI. A
-static nginx `return 200` health endpoint stays green while PHP-FPM is dead —
-container "healthy", every request 502.
-
-**Failure.** Both daemons are `autorestart=true`. If either exhausts
-`startretries` and reaches `FATAL`, an event listener shuts supervisord down so
-the container exits and the orchestrator restarts it. Supervisor's default is
-to leave the program dead and keep running.
-
-**Shutdown.** `stopsignal=QUIT` on both, nginx stopped first so it drains
-before FPM does.
-
-**Logs.** nginx access/error go to container stdout/stderr, not to files in the
-writable layer. PHP-FPM error and access logs go to `/proc/self/fd/{1,2}`.
-
-**Workers.** Containers that override `CMD` (`queue:work`, cron, …) run no
-nginx, so the image healthcheck cannot pass. Replace or disable it in compose —
-every template in `examples/` shows this.
-
-**Client IP.** nginx trusts `X-Forwarded-For` from RFC1918 and applies
-`real_ip_recursive`, so `REMOTE_ADDR` inside PHP is the real client. Without it
-every request appears to come from Traefik and Moodle login throttling, Drupal
-flood control and Laravel rate limiting all silently stop working. Loopback is
-deliberately *not* trusted, which is what keeps the `/fpm-ping` ACL sound.
-This is only as good as Traefik's `forwardedHeaders.trustedIPs` — see
-[`docs/reverse-proxy.md`](docs/reverse-proxy.md).
-
-**Security posture.** Runs as `www-data` 1000:1000. `/usr/local/etc/php/conf.d`
-stays root-owned so a compromised worker cannot persist an `auto_prepend_file`
-across restarts. There is no supervisor control socket — it would have given an
-RCE a process-spawning channel, since FPM workers share its uid.
+| [`docs/image.md`](docs/image.md) | contents, the runtime contract, roles, every environment variable, presets, tuning |
+| [`docs/security.md`](docs/security.md) | threat model, the hardened run flags, what the tests prove, the ImageMagick policy |
+| [`docs/reverse-proxy.md`](docs/reverse-proxy.md) | Traefik and Cloudflare: client IPs, keep-alive, compression, timeouts |
+| [`docs/README.md`](docs/README.md) | every other document |
 
 ## Development
 
 ```bash
-make build              # PHP 8.4
-make build PHP=8.2
-make test               # boots the image and asserts it actually works
-make lint               # hadolint
-make scan               # trivy
+make build              # PHP 8.4, runtime and dev  ->  local/php-base:8.4[-dev]
+make build PHP=8.5
+make build-all          # every line in versions.json
+make test               # the runtime suite (hardened flags) and the dev suite
+make test-frameworks    # real Laravel, Drupal, WordPress and Moodle installs
+make resolve            # what CI would build right now: digests and tags
+make lint               # hadolint and shellcheck
+make scan               # Trivy, HIGH/CRITICAL
 make shell
 ```
 
-`make test` builds a fixture application on the base, boots it, and asserts 23
-behaviours: PHP executing through FastCGI, uid/gid really being 1000:1000,
-runtime env overrides landing, `REMOTE_ADDR` being the client rather than the
-proxy, `conf.d` not being writable, no foreign-owned files baked in, logs
-reaching stdout, and killing PHP-FPM bringing the container down. The previous
-smoke test booted an image with no application and asserted a static nginx
-response — it could not fail.
+Local builds are named `local/php-base:*` on purpose. Building as
+`docker.io/achelesstech/php-base:8.4` would silently replace the image every
+app on this machine builds from.
 
 ## Layout
 
 ```
-Dockerfile
-rootfs/
-  etc/nginx/nginx.conf                    http{} only — no server{}
-  etc/supervisor/supervisord.conf
-  usr/local/bin/docker-entrypoint.sh
-  usr/local/bin/healthcheck.sh
-  usr/local/bin/nginx-validate.sh
-  usr/local/bin/supervisor-fatal-listener.sh
-  usr/local/etc/php/conf.d/zz-base.ini
-  usr/local/etc/php-fpm.d/www.conf
-examples/                                 templates to copy into app repos
-examples/traefik/                         the edge proxy (temporary home)
-docs/reverse-proxy.md                     Traefik + Cloudflare
-docs/traefik/                             the edge proxy's labels, static config, VPS setup
-test/                                     fixture app + behavioural test suite
-.github/workflows/build-base.yml
+Dockerfile                    multi-stage: ext-builder, runtime (clean Alpine), dev
+rootfs/                       files for the runtime image
+  etc/nginx/                  nginx.conf (http{} only), presets/, php-base/ snippets
+  etc/php-base/s6/            service definitions: php-fpm, nginx, scheduler, worker
+  etc/ImageMagick-7/          policy.xml: format allowlist and resource caps
+  usr/local/bin/              entrypoint, healthcheck, php-base-web, php-base-every, …
+  usr/local/etc/              zz-base.ini, php-fpm.d/www.conf
+rootfs-dev/                   additions for the -dev image
+versions.json                 build matrix: lines, EOL, latest, size ceilings, frameworks
+scripts/                      resolver, guards, link checker, Cloudflare ranges
+test/                         runtime and dev suites, framework smoke tests, script tests
+examples/                     app templates to copy into app repositories
+examples/traefik/             the edge proxy
+examples/portainer/           Portainer CE behind Traefik
+docs/                         image reference, security, reverse proxy, Docker Hub text
+docs/traefik/                 the edge proxy's labels, static config, VPS setup
+docs/portainer/               why the Portainer install differs from the official one
+.github/workflows/            build-base.yml, watch-upstream.yml
 ```
 
-Every config file is a real file under `rootfs/`. None are generated by
-`RUN cat <<EOF` heredocs — that is how the previous revision shipped two
-Dockerfiles that could not build (`chmod` parsed as a Dockerfile instruction)
-and one that emitted invalid PHP from three levels of nested quoting.
+Every config file is a real file under `rootfs/`. None is generated by
+`RUN cat <<EOF` heredocs: that is how an earlier revision shipped Dockerfiles
+that could not build and PHP that would not parse.
