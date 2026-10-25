@@ -373,9 +373,14 @@ render_services() {
     # SIGTERM: the stop order (nginx drains first); finish: the exit status.
     for hook in SIGTERM finish; do ln -s "/etc/php-base/s6/.s6-svscan/$hook" "$scan/.s6-svscan/$hook"; done
     for service in php-fpm nginx; do enable_service "$service"; done
+    # Both run scripts cd to APP_ROOT; without it s6 would restart them forever.
+    if [ -n "${SCHEDULER_COMMAND:-}${WORKER_COMMAND:-}" ] && [ ! -d "$APP_ROOT" ]; then
+        die "APP_ROOT '${APP_ROOT}' is not a directory (SCHEDULER_COMMAND/WORKER_COMMAND run there)"
+    fi
     if [ -n "${SCHEDULER_COMMAND:-}" ]; then
         interval="${SCHEDULER_INTERVAL:-60}"
-        case "$interval" in ''|*[!0-9]*|0) die "SCHEDULER_INTERVAL must be a whole number of seconds, got '${interval}'" ;; esac
+        # 0*: also 00 and 060, which php-base-every rejects (s6 would loop).
+        case "$interval" in ''|*[!0-9]*|0*) die "SCHEDULER_INTERVAL must be a whole number of seconds with no leading zero, got '${interval}'" ;; esac
         enable_service scheduler
         log "scheduler: every ${interval}s: ${SCHEDULER_COMMAND}"
     fi

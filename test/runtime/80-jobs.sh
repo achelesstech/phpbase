@@ -34,3 +34,21 @@ EOF_CMD
 QUOTE="$(start quote -e "WORKER_COMMAND=${quote_cmd}" "$FIXTURE_TAG")"
 argv=""; for _ in $(seq 1 10); do argv="$(docker exec "$QUOTE" cat /tmp/argv 2>/dev/null)" && break; sleep 1; done
 [[ "$argv" == '["a b","c\"d"]' ]] && ok "WORKER_COMMAND keeps quoted arguments intact" || bad "worker argv was '${argv}', expected [\"a b\",\"c\\\"d\"]"
+
+# Settings s6 would otherwise restart forever (php-base-every exits 2 on a
+# leading-zero interval; the run scripts exit 1 when APP_ROOT is missing) are
+# refused at start: exit 1, naming the variable. Web role, so no command;
+# `timeout` turns a container that starts anyway into a failure, not a hang.
+check_job_refused() {   # check_job_refused VARIABLE docker-run-args...
+    local name="$1" out rc=0; shift
+    out="$(timeout 30 docker run --rm --label "$LABEL" "${HARDENED[@]}" "$@" "$FIXTURE_TAG" 2>&1)" || rc=$?
+    if [[ "$rc" == 1 ]] && grep -qF -- "$name" <<<"$out"; then
+        ok "$* is refused and names ${name}"
+    else
+        bad "$*: exit ${rc}: $(tail -1 <<<"$out")"
+    fi
+}
+check_job_refused SCHEDULER_INTERVAL -e SCHEDULER_COMMAND=true -e SCHEDULER_INTERVAL=00
+check_job_refused SCHEDULER_INTERVAL -e SCHEDULER_COMMAND=true -e SCHEDULER_INTERVAL=060
+check_job_refused APP_ROOT -e APP_ROOT=/nonexistent -e WORKER_COMMAND=true
+check_job_refused APP_ROOT -e APP_ROOT=/nonexistent -e SCHEDULER_COMMAND=true

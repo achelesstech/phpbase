@@ -7,7 +7,7 @@
 #   php-base-every 60   php artisan schedule:run
 #   php-base-every 300  vendor/bin/drush cron
 #   php-base-every 60   wp cron event run --due-now
-#   php-base-every 60   php public/admin/cli/cron.php
+#   php-base-every 60   php admin/cli/cron.php
 #
 # Every app here needs one of these, and each template used to hand-roll
 # `while true; do …; sleep 60; done`, which drifts (the period becomes 60s +
