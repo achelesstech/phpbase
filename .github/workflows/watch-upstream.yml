@@ -58,5 +58,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ONLY: ${{ steps.check.outputs.rebuild }}
         run: |
-          gh workflow run build-base.yml -R "$GITHUB_REPOSITORY" -f only="$ONLY" -f publish=true
+          gh workflow run build-base.yml -R "$GITHUB_REPOSITORY" -f only="$ONLY" -f publish=true -f trigger=watcher
           echo "::notice::dispatched build-base for ${ONLY}"

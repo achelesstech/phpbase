@@ -25,7 +25,8 @@ name: build-base
 #             the others.
 #   guards    fails the run, after the healthy lines are published, when a
 #             freshness guard removed a line.
-#   report    on a scheduled run, any failure opens (or bumps) an issue.
+#   report    on a scheduled or watcher-dispatched run, any failure opens
+#             (or bumps) an issue.
 #
 # Linting (hadolint, shellcheck, actionlint, the Cloudflare ranges check, …)
 # is lint.yml's job: `make lint` on every push and PR.
@@ -75,6 +76,10 @@ on:
         description: 'Skip the framework smoke tests (emergency security rebuild)'
         type: boolean
         default: false
+      trigger:
+        description: 'Who dispatched this run. watch-upstream passes "watcher", so its failures open an issue.'
+        required: false
+        default: 'manual'
 
 permissions:
   contents: read
@@ -213,8 +218,10 @@ jobs:
             echo "BASE_NAME=docker.io/library/alpine:${ALPINE}"
             echo "BASE_DIGEST=${ALPINE_DIGEST}"
             echo "BASE_VERSION=${BUILD_TAG}"
-            # A new date forces a fresh `apk upgrade && apk add` (see Dockerfile).
-            echo "PKG_CACHE_BUST=${DATE}"
+            # A per-run value forces a fresh `apk upgrade && apk add` (see
+            # Dockerfile), so a same-day watcher rebuild picks up a package fix
+            # instead of hitting the gha cache from the day's first build.
+            echo "PKG_CACHE_BUST=${DATE}-${GITHUB_RUN_ID}"
             echo "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             echo "VCS_REF=${GITHUB_SHA}"
             echo "ALLOW_MISSING_DEV_EXTENSIONS=$([[ "${PRERELEASE}" == "true" ]] && echo 1 || echo 0)"
@@ -494,12 +501,14 @@ jobs:
           exit 1
 
   # ===========================================================================
-  # A scheduled run that fails only emails whoever last edited the cron line.
-  # Open (or bump) an issue instead, so a broken weekly build cannot go unseen.
+  # A scheduled run that fails only emails whoever last edited the cron line,
+  # and a run the watcher dispatches emails no one. Open (or bump) an issue
+  # instead, so a broken weekly or watcher build cannot go unseen.
   report:
     needs: [resolve, build, publish, guards]
     if: >-
-      always() && github.event_name == 'schedule' && (
+      always() && (github.event_name == 'schedule' ||
+        (github.event_name == 'workflow_dispatch' && inputs.trigger == 'watcher')) && (
         needs.resolve.result == 'failure' || needs.build.result == 'failure' ||
         needs.publish.result == 'failure' || needs.guards.result == 'failure')
     runs-on: ubuntu-24.04
@@ -511,8 +520,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           FAILED: ${{ needs.resolve.outputs.failed }}
+          TRIGGER: ${{ github.event_name == 'schedule' && 'weekly' || inputs.trigger }}
         run: |
-          title="Weekly php-base build failed"
+          title="php-base build failed (${TRIGGER} run)"
           url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           details=""
           if [[ -n "${FAILED}" && "${FAILED}" != "[]" ]]; then

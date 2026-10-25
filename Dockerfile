@@ -2,8 +2,10 @@
 # =============================================================================
 # achelesstech/php-base — PHP-FPM + nginx under s6, non-root, proxy-fronted
 # =============================================================================
-# One image per PHP line (8.2, 8.3, 8.4, 8.5), rebuilt weekly from the newest
-# upstream patch release on the newest Alpine the official PHP image supports.
+# One image per PHP line (8.2, 8.3, 8.4, 8.5), rebuilt weekly (and whenever
+# the upstream watcher sees a new PHP image, Alpine image or package update)
+# from the newest upstream patch release on the newest Alpine the official PHP
+# image supports.
 #
 #   FROM docker.io/achelesstech/php-base:8.4@sha256:…       production
 #   FROM docker.io/achelesstech/php-base:8.4-dev@sha256:…   + Composer, Xdebug,
@@ -230,9 +232,11 @@ FROM ${ALPINE_IMAGE} AS runtime
 
 ARG USER_ID=1000
 ARG GROUP_ID=1000
-# CI sets this to the build date. It is echoed by the package RUN below, so
-# that layer is rebuilt every week instead of being served from the build
-# cache — a cached `apk add` would ship last month's nginx and openssl forever.
+# CI sets this to a per-run value (date + run id; local builds use the date).
+# It is echoed by the package RUN below, so that layer is rebuilt on every CI
+# run instead of being served from the build cache — a cached `apk add` would
+# ship last month's nginx and openssl forever, and a same-day watcher rebuild
+# for a package fix would republish identical bytes.
 ARG PKG_CACHE_BUST=0
 
 # ── Environment ──────────────────────────────────────────────────────────────

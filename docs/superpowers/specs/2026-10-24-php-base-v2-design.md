@@ -321,7 +321,7 @@ The same facts go into `/etc/php-base/release`, which `php-base-info` reads.
 | `PHP_IMAGE` | `php:8.4-fpm-alpine@sha256:…` |
 | `ALPINE_IMAGE` | `alpine:3.24@sha256:…` |
 | `COMPOSER_IMAGE` | `composer/composer:2-bin@sha256:…` |
-| `PKG_CACHE_BUST` | the build date; refreshes the `apk upgrade` layer |
+| `PKG_CACHE_BUST` | the build date (CI: date + run id); refreshes the `apk upgrade` layer |
 | PECL versions | each marked with a Renovate comment |
 | metadata args | build date, git ref, etc., declared as late as possible, because an argument invalidates the cache of every later step |
 
@@ -609,8 +609,8 @@ The examples' line, 8.4, therefore tests everything the examples offer.
    - cosign keyless signing, provenance `mode=max`, SBOM;
    - Trivy HIGH/CRITICAL ignore-unfixed as a hard gate;
    - actions pinned by SHA;
-   - an issue opened when a scheduled run fails;
-   - `workflow_dispatch` inputs: `only`, `publish`, `include_eol`, `skip_frameworks`.
+   - an issue opened when a scheduled or watcher-dispatched run fails;
+   - `workflow_dispatch` inputs: `only`, `publish`, `include_eol`, `skip_frameworks`, `trigger`.
 
 **`watch-upstream.yml`:**
 - cron `17 */6 * * *`;

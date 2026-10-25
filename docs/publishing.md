@@ -93,11 +93,14 @@ resolve ─► build (line × arch, native runners) ─► publish (per line) �
    summary prints the digest to pin.
 4. **guards** fails the run after the healthy lines have published, if a
    freshness guard removed a line.
-5. **report**: when a **scheduled** run fails, it opens an issue, or
-   comments on the open one with the same title. Otherwise a failing weekly
-   build would only email whoever last edited the cron line. A run the
-   watcher dispatches is a `workflow_dispatch` run, so its failure opens no
-   issue. After a security release, check the *Actions* tab.
+5. **report**: when a **scheduled** run or a run the **watcher** dispatched
+   fails, it opens an issue titled `php-base build failed (weekly run)` or
+   `php-base build failed (watcher run)`, or comments on the open one with
+   the same title. Otherwise a failing weekly build would only email whoever
+   last edited the cron line, and a failing watcher build would email no
+   one. The watcher marks its dispatches with `trigger=watcher`; a manual
+   dispatch (`trigger` defaults to `manual`) opens no issue, because whoever
+   started it is watching.
 
 The 8.6 release candidate is a canary: its failure doesn't fail the run, and
 it is tagged (`8.6-rc`, `8.6-rc-dev`) only when it passes.
@@ -119,6 +122,12 @@ It then dispatches `build-base` with `only=<those lines>` and `publish=true`,
 and its job summary shows each line's reason. A failed lookup fails the
 watcher instead of reading as "current", so a Docker Hub outage can't hide an
 update.
+
+Every CI run reinstalls the OS packages: the `apk upgrade && apk add` layer
+is keyed on `PKG_CACHE_BUST`, which CI sets to the date plus the run id, so
+an `apk-upgrades` rebuild on the same day as the weekly build really picks up
+the new packages instead of reusing the cached layer. (Local builds through
+`scripts/build-args.sh` use the date, so they refresh once a day.)
 
 Why: PHP shipped the PHP2Shell fixes on a Wednesday. The Monday build alone
 would have published them five days later.
@@ -162,6 +171,7 @@ how a base rebuild (a CVE fix) reaches the app.
 | `publish` | on | off: build and test only |
 | `include_eol` | off | also build lines past their `eol` |
 | `skip_frameworks` | off | skip the framework installs, for an emergency security rebuild |
+| `trigger` | `manual` | `watcher` (set by `watch-upstream`): a failure opens an issue |
 
 From a terminal:
 
