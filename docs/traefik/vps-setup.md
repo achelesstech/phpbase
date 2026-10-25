@@ -364,15 +364,19 @@ and Traefik picks it up from the Docker events stream within a second.
 0 3 * * *  cd /opt/traefik && make backup && rclone move traefik-state-*.tgz remote:backups/
 ```
 
-Updates:
+Updates: Traefik is pinned by tag **and** digest, so `make pull` never moves
+it. Edit the tag and digest in `compose.yml`, read the
+[migration notes](https://doc.traefik.io/traefik/migrate/v3/), then:
 
 ```bash
-cd /opt/traefik && make pull && make check && make up
+cd /opt/traefik && make check && make up
 ```
 
-Always `make check` between `pull` and `up`. Traefik has changed dynamic-config
-schemas across minor versions before, and the failure mode is `:443` accepting
-connections and serving nothing.
+Always `make check` before `up`: it boots exactly the new image against
+`config/`. Traefik has changed dynamic-config schemas across minor versions
+before, and the failure mode is `:443` accepting connections and serving
+nothing. See [Traefik pinned by tag and digest](../../examples/traefik/README.md#design-decisions)
+and the [reload matrix](static-config.md#reload-matrix).
 
 **Back up `/opt/traefik/certs/` and `/opt/traefik/secrets/`.** Losing the ACME
 store is not fatal but re-issues every certificate, and the weekly duplicate
