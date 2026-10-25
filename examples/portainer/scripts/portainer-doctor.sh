@@ -10,7 +10,7 @@
 # that no port is published.
 # =============================================================================
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 
 COMPOSE="${COMPOSE:-docker compose}"
 CURL_IMAGE="${CURL_IMAGE:-curlimages/curl:latest}"

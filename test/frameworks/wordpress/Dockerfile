@@ -5,10 +5,9 @@ ARG BASE_IMAGE
 ARG BASE_DEV_IMAGE
 FROM ${BASE_IMAGE}
 ARG WP_VERSION=latest
-# `curl | tar` below must fail when curl does.
-SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
+# `curl | tar` below must fail when curl does: pipefail (no SHELL instruction).
 USER root
-RUN set -eux; \
+RUN set -eux -o pipefail; \
     curl -fsSL "https://wordpress.org/wordpress-${WP_VERSION}.tar.gz" | tar xz --strip-components=1 -C /var/www/html; \
     curl -fsSL -o /usr/local/bin/wp https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar; \
     chmod 0755 /usr/local/bin/wp; \

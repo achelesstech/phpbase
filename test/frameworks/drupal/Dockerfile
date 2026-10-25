@@ -6,8 +6,7 @@ FROM ${BASE_DEV_IMAGE} AS build
 ARG DRUPAL_SPEC=drupal/recommended-project:^11
 RUN set -eux; \
     composer create-project --no-interaction --prefer-dist --no-progress "${DRUPAL_SPEC}" /tmp/app; \
-    cd /tmp/app; \
-    composer require --no-interaction --no-progress drush/drush
+    composer --working-dir=/tmp/app require --no-interaction --no-progress drush/drush
 
 FROM ${BASE_IMAGE}
 COPY --from=build --chown=root:root /tmp/app /var/www/html

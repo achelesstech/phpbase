@@ -49,18 +49,10 @@ test-frameworks: build
 resolve:
 	./scripts/resolve-matrix.sh | sed -n 's/^lines=//p' | jq '.[] | {line, php_version, alpine_full, alpine_image, build_tag, tags}'
 
-# Same configs CI uses.
+# Exactly what CI runs (.github/workflows/lint.yml): every linter, the example
+# compose files, the Traefik config check, links, unit tests.
 lint:
-	docker run --rm -i -v "$(CURDIR)/.hadolint.yaml:/.hadolint.yaml:ro" \
-		hadolint/hadolint hadolint --config /.hadolint.yaml - < Dockerfile
-	docker run --rm -v "$(CURDIR):/src:ro" -w /src koalaman/shellcheck:v0.11.0 -S warning -x -s sh \
-		rootfs/usr/local/bin/docker-entrypoint.sh rootfs/usr/local/bin/healthcheck.sh \
-		rootfs/usr/local/bin/php-base-every rootfs/usr/local/bin/php-base-info \
-		rootfs/usr/local/bin/php-base-validate rootfs/usr/local/bin/nginx-validate.sh \
-		rootfs/usr/local/bin/php-base-web rootfs/etc/php-base/s6/.s6-svscan/SIGTERM \
-		rootfs/etc/php-base/s6/.s6-svscan/finish rootfs/etc/php-base/s6/fail-fast rootfs/etc/php-base/s6/*/run
-	docker run --rm -v "$(CURDIR):/src:ro" -w /src koalaman/shellcheck:v0.11.0 -S warning -x -s bash \
-		scripts/*.sh scripts/lib/*.sh test/*.sh test/runtime/*.sh test/scripts/*.sh test/frameworks/*.sh
+	./scripts/lint.sh
 
 scan:
 	trivy image --severity HIGH,CRITICAL --ignore-unfixed $(TAG)

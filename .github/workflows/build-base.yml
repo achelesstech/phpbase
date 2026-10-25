@@ -13,7 +13,7 @@ name: build-base
 #                                          allowed to fail, tagged only on a pass
 #
 # Flow:  resolve ─► build (line × arch, native runners) ─► publish (per line) ─► guards
-#   resolve   lint; pin every upstream input to a digest and pick a build tag
+#   resolve   pin every upstream input to a digest and pick a build tag
 #             no one has published (scripts/resolve-matrix.sh); a line whose
 #             upstream is stale fails its freshness guard and is not built
 #   build     build + push BY DIGEST (untagged, invisible), pull that exact
@@ -26,6 +26,9 @@ name: build-base
 #   guards    fails the run, after the healthy lines are published, when a
 #             freshness guard removed a line.
 #   report    on a scheduled run, any failure opens (or bumps) an issue.
+#
+# Linting (hadolint, shellcheck, actionlint, the Cloudflare ranges check, …)
+# is lint.yml's job: `make lint` on every push and PR.
 #
 # Required secrets: DOCKERHUB_USERNAME, DOCKERHUB_TOKEN (Read & Write token).
 # =============================================================================
@@ -114,25 +117,6 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Lint Dockerfile
-        uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
-        with:
-          dockerfile: Dockerfile
-          config: .hadolint.yaml
-
-      - name: Lint shell scripts
-        run: |
-          docker run --rm -v "$PWD:/src:ro" -w /src koalaman/shellcheck:v0.11.0 -S warning -x \
-            -s sh rootfs/usr/local/bin/docker-entrypoint.sh rootfs/usr/local/bin/healthcheck.sh \
-                  rootfs/usr/local/bin/php-base-every rootfs/usr/local/bin/php-base-info \
-                  rootfs/usr/local/bin/php-base-validate rootfs/usr/local/bin/nginx-validate.sh
-          docker run --rm -v "$PWD:/src:ro" -w /src koalaman/shellcheck:v0.11.0 -S warning -x \
-            -s bash scripts/*.sh test/*.sh test/frameworks/*.sh
-
-      - name: Cloudflare ranges still current?
-        # Reports, never rewrites: who nginx trusts changes only through a PR.
-        run: scripts/update-cloudflare-ips.sh --check || true
 
       - name: Resolve upstream digests and versions
         id: resolve

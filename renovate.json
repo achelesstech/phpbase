@@ -1,8 +1,12 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "$comment": "Renovate for the BASE repo: PECL pins in the Dockerfile and GitHub Action digests. PHP and Alpine are NOT here on purpose — the weekly workflow resolves them to the newest upstream digest on every run.",
+  "description": [
+    "Renovate for the BASE repo: PECL pins in the Dockerfile, GitHub Action digests, and the third-party images the examples run. PHP and Alpine are NOT here on purpose — the weekly workflow resolves them to the newest upstream digest on every run.",
+    "ignorePaths REPLACES config:recommended's list, which includes **/examples/** and **/test/**. That replacement is what lets Renovate see examples/ at all: drop this ignorePaths (or restore the preset's list) and the examples/** package rules below silently stop matching anything."
+  ],
   "extends": ["config:recommended", "helpers:pinGitHubActionDigests"],
   "schedule": ["before 6am on monday"],
+  "ignorePaths": ["**/node_modules/**", ".work/**", ".cache/**"],
   "customManagers": [
     {
       "customType": "regex",
@@ -21,11 +25,30 @@
       "groupName": "PECL extensions"
     },
     {
+      "description": "PECL minor/patch bumps merge themselves once CI is green; the next build ships them. A major bump stays a PR for a human.",
+      "matchManagers": ["custom.regex"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "automerge": true
+    },
+    {
       "description": "Actions are pinned by digest; minor/patch/digest bumps merge themselves once CI is green",
       "matchManagers": ["github-actions"],
       "groupName": "GitHub Actions",
       "matchUpdateTypes": ["minor", "patch", "digest"],
       "automerge": true
+    },
+    {
+      "description": "Images the examples run (Postgres, MariaDB, Traefik, socket proxy, Portainer, Node): a PR each, never automerged — a database or edge-proxy bump needs a human to read its release notes",
+      "matchFileNames": ["examples/**"],
+      "matchDatasources": ["docker"],
+      "automerge": false
+    },
+    {
+      "description": "php-base and app-image references in the examples are placeholders for the project that copies them (whose own renovate.json maintains them), not dependencies of this repo",
+      "matchFileNames": ["examples/**"],
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["docker.io/achelesstech/**", "achelesstech/**"],
+      "enabled": false
     }
   ]
 }

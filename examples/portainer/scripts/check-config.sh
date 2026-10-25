@@ -7,7 +7,7 @@
 # misconfiguration that starts fine and locks you out of the UI.
 # =============================================================================
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 
 COMPOSE="${COMPOSE:-docker compose}"
 TRAEFIK_MW="../traefik/config/dynamic/middlewares.yml"

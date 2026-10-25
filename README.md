@@ -143,7 +143,7 @@ make build-all          # every line in versions.json
 make test               # the runtime suite (hardened flags) and the dev suite
 make test-frameworks    # real Laravel, Drupal, WordPress and Moodle installs
 make resolve            # what CI would build right now: digests and tags
-make lint               # hadolint and shellcheck
+make lint               # scripts/lint.sh: linters, compose config, links, unit tests
 make scan               # Trivy, HIGH/CRITICAL
 make shell
 ```
