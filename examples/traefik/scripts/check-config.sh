@@ -93,14 +93,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
-start_err="$(docker run -d --name "$NAME" \
+# Judged by the exit status, not by stderr: on a cold cache (every CI runner)
+# `docker run` prints its pull progress there and the container starts fine.
+if ! start_err="$(docker run -d --name "$NAME" \
     -v "$PWD/config/traefik.yml:/etc/traefik/traefik.yml:ro" \
     -v "$PWD/config/dynamic:/etc/traefik/dynamic:ro" \
     -v "$tmpcerts:/etc/traefik/certs" \
     --entrypoint traefik "$IMAGE" \
-    --configFile=/etc/traefik/traefik.yml 2>&1 >/dev/null)"
-
-if [ -n "$start_err" ]; then
+    --configFile=/etc/traefik/traefik.yml 2>&1 >/dev/null)"; then
     bad "could not start the check container:"
     sed 's/^/        /' <<<"$start_err"
     exit 1
