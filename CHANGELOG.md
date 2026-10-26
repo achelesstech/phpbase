@@ -136,6 +136,9 @@ v1 need changes before they work. Every change and what to do about it is in
   request: hadolint, ShellCheck, actionlint, `docker compose config` for every
   example, the Traefik config check, the link check and the
   `test/scripts/*.test.sh` unit tests.
+- The base workflows need one secret, `DOCKERHUB_TOKEN`, and log in as
+  `achelesstech`. A `DOCKERHUB_USERNAME` secret would make GitHub withhold the
+  build matrix, which names the image.
 - Setup, the watcher and Renovate: [`docs/publishing.md`](docs/publishing.md).
 
 ### Examples and docs

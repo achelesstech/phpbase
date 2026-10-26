@@ -31,7 +31,10 @@ name: build-base
 # Linting (hadolint, shellcheck, actionlint, the Cloudflare ranges check, …)
 # is lint.yml's job: `make lint` on every push and PR.
 #
-# Required secrets: DOCKERHUB_USERNAME, DOCKERHUB_TOKEN (Read & Write token).
+# Required secret: DOCKERHUB_TOKEN, a Read & Write token for the achelesstech
+# account. The username is written in, not a secret: GitHub withholds every
+# job output that contains a secret's value, and resolve's outputs name
+# docker.io/achelesstech/php-base (test/scripts/workflow.test.sh).
 # =============================================================================
 
 on:
@@ -98,7 +101,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
-      HAS_HUB_CREDENTIALS: ${{ secrets.DOCKERHUB_USERNAME != '' }}
+      HAS_HUB_CREDENTIALS: ${{ secrets.DOCKERHUB_TOKEN != '' }}
     outputs:
       lines: ${{ steps.resolve.outputs.lines }}
       build: ${{ steps.resolve.outputs.build }}
@@ -112,7 +115,7 @@ jobs:
         with:
           persist-credentials: false
 
-      # Log in whenever the secrets exist (everything except fork PRs), not
+      # Log in whenever the token exists (everything except fork PRs), not
       # only when publishing: anonymous Docker Hub pulls are capped at 100 per
       # hour per IP, runners share IPs, and one weekly run makes dozens of
       # manifest requests. (Verified the hard way while testing this design.)
@@ -120,7 +123,7 @@ jobs:
         if: env.HAS_HUB_CREDENTIALS == 'true'
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          username: achelesstech
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Resolve upstream digests and versions
@@ -171,7 +174,7 @@ jobs:
     env:
       PUBLISH: ${{ needs.resolve.outputs.publish }}
       SCOPE: php${{ matrix.line }}-${{ matrix.arch }}
-      HAS_HUB_CREDENTIALS: ${{ secrets.DOCKERHUB_USERNAME != '' }}
+      HAS_HUB_CREDENTIALS: ${{ secrets.DOCKERHUB_TOKEN != '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -183,7 +186,7 @@ jobs:
         if: env.HAS_HUB_CREDENTIALS == 'true'
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          username: achelesstech
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       # The same names scripts/build-args.sh gives local builds
@@ -417,7 +420,7 @@ jobs:
         if: steps.ready.outputs.ready == 'true'
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          username: achelesstech
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1

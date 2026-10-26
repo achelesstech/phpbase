@@ -27,15 +27,21 @@ Two workflows do all of it:
 2. **Create an access token that can push**: a Read & Write personal access
    token from a member account (a bot account is better than a person), or an
    organisation access token. Not the account password.
-3. **Add two repository secrets** on GitHub (*Settings → Secrets and
+3. **Add one repository secret** on GitHub (*Settings → Secrets and
    variables → Actions*):
 
    | Secret | Value |
    |---|---|
-   | `DOCKERHUB_USERNAME` | the account the token belongs to |
    | `DOCKERHUB_TOKEN` | the token |
 
-   Every job that pulls or pushes logs in with them whenever they exist,
+   The workflows log in as `achelesstech`, written in them. Do not add a
+   `DOCKERHUB_USERNAME` secret: GitHub withholds every job output that
+   contains a secret's value, and the build matrix names
+   `docker.io/achelesstech/php-base`, so build and publish would get an empty
+   matrix. A token from another account needs that account's name in the
+   workflows' `username:` lines instead.
+
+   Every job that pulls or pushes logs in whenever the token exists,
    including on pull requests. Anonymous Docker Hub pulls are rate-limited
    per IP, and GitHub's runners share IPs. Pull requests from forks get no
    secrets: they build and test without logging in, and never push.

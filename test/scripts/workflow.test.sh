@@ -5,11 +5,14 @@
 #   bash test/scripts/workflow.test.sh
 #   BUILD_JSON='[…]' COMPOSER_IMAGE='composer/…@sha256:…' bash test/scripts/workflow.test.sh
 #
-# Checks two things a typo in the workflow would otherwise break only in CI:
+# Checks three things a slip in the workflow would otherwise break only in CI:
 #   * every matrix.<key> the workflow reads is a key of the resolver's build[0]
 #     (an unknown key silently expands to an empty string);
 #   * the build-arguments step writes exactly the names scripts/build-args.sh
-#     prints, so CI and local builds get the same arguments.
+#     prints, so CI and local builds get the same arguments;
+#   * DOCKERHUB_TOKEN is the only secret it reads. GitHub withholds a job
+#     output that contains any secret's value, and resolve's outputs name the
+#     image, so a username secret leaves build and publish an empty matrix.
 #
 # Without BUILD_JSON it runs `scripts/resolve-matrix.sh --only 8.4 --local`
 # (registry reads). CI passes the run's own resolver output instead. Either
@@ -72,6 +75,14 @@ elif [[ -n "$missing$extra" ]]; then
     bad "build arguments differ from build-args.sh — missing: [$(words "$missing")] extra: [$(words "$extra")]"
 else
     ok "the workflow writes the same $(wc -l <<<"$written") build arguments as build-args.sh"
+fi
+
+# ── secrets ──────────────────────────────────────────────────────────────────
+secrets_read="$(grep -oE 'secrets\.[A-Za-z_][A-Za-z0-9_]*' "$WORKFLOW" | sort -u || true)"
+if [[ "$secrets_read" == secrets.DOCKERHUB_TOKEN ]]; then
+    ok "DOCKERHUB_TOKEN is the only secret the workflow reads"
+else
+    bad "the workflow reads [$(words "$secrets_read")], not only secrets.DOCKERHUB_TOKEN: GitHub would withhold any output of resolve that contains one of their values"
 fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
