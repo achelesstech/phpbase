@@ -12,6 +12,8 @@ set -euo pipefail
 
 IMG="${1:?usage: run-dev.sh <dev-image>}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=scripts/lib/registry.sh
+. "$HERE/../scripts/lib/registry.sh"
 # Every container carries LABEL, so an interrupted run leaves nothing behind.
 LABEL="php-base-test=dev-$$"
 cleanup() {
@@ -83,16 +85,20 @@ upstream="$(label io.github.achelesstech.php-base.upstream-image)@$(label io.git
 ours="$(words "$(php_ "$IMG" sh -c 'echo "$PHPIZE_DEPS"' || true)")"
 # The upstream image's amd64 Env: from the local image cache when the build
 # left that exact digest there (no Docker Hub round trip, so no 429s), else
-# from the registry. Sets env_json (or the error) and env_source.
+# from the registry: its index, then its linux/amd64 manifest, one pull each
+# (scripts/lib/registry.sh). CI always takes the registry path: the buildx
+# container builder never puts the upstream image in the local cache.
+# Sets env_json (or the error) and env_source.
 upstream_env() {
-    local config
+    local index config
     env_json="$(docker image inspect -f '{{if eq .Architecture "amd64"}}{{json .Config.Env}}{{end}}' "$upstream" 2>/dev/null)" || env_json=""
     if [[ -n "$env_json" ]]; then
         env_source="local image cache"; return 0
     fi
     env_source="registry"
-    config="$(docker buildx imagetools inspect "$upstream" --format '{{json .Image}}' 2>&1)" || { env_json="$config"; return 1; }
-    env_json="$(jq -c '.["linux/amd64"].config.Env' <<<"$config")"
+    index="$(index_of "$upstream" 2>&1)" || { env_json="$index"; return 1; }
+    config="$(amd64_image "${upstream%%:*}" "$index" 2>&1)" || { env_json="$config"; return 1; }
+    env_json="$(jq -c '.config.Env' <<<"$config")"
 }
 env_json=""; env_source=""
 if upstream_env \

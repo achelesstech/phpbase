@@ -14,17 +14,19 @@
 # on a multi-platform ref fetches the whole index and its entries: 9 pulls for
 # php:X.Y-fpm-alpine, measured, so a full resolve ran out at its fifth line.
 # These fetch one manifest per call. Never use --format on an index here;
-# test/scripts/upstream.test.sh's stub refuses it.
+# test/scripts/upstream.test.sh's stub refuses it. Nothing else calls
+# `imagetools inspect` (test/scripts/registry.test.sh).
 # =============================================================================
 
 index_of() {
     docker buildx imagetools inspect --raw "$1"
 }
 
-# A manifest's digest is the sha256 of its bytes, which --raw prints unchanged
-# (the command substitution drops only the newline buildx adds). A wrong hash
-# could not go unseen: every digest is pulled again by @digest, and the
-# registry refuses a digest it does not have.
+# A manifest's digest is the sha256 of its bytes, which --raw prints unchanged,
+# adding no newline. (A manifest whose own bytes ended in one would lose it to
+# the command substitution and hash wrong.) A wrong hash could not go unseen:
+# every digest is pulled again by @digest, and the registry refuses a digest
+# it does not have.
 digest_of_index() {
     printf '%s' "$1" | sha256sum | awk '{ print "sha256:" $1 }'
 }
