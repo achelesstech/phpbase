@@ -26,14 +26,16 @@
 # reason php-image, as an image without labels cannot match upstream. Every
 # other failed lookup fails the run: an outage must not read as "current".
 #
-# All digests compared are index (manifest-list) digests, as printed by
-#   docker buildx imagetools inspect <ref> --format '{{json .Manifest}}' | jq -r .digest
+# All digests compared are index (manifest-list) digests, each read with one
+# pull (scripts/lib/registry.sh).
 # =============================================================================
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # shellcheck source=scripts/lib/upstream.sh
 . scripts/lib/upstream.sh
+# shellcheck source=scripts/lib/registry.sh
+. scripts/lib/registry.sh
 
 note() { echo "::notice::$*" >&2; }
 warn() { echo "::warning::$*" >&2; }
@@ -45,18 +47,20 @@ ALPINE_LABEL_KEY=org.opencontainers.image.base.digest
 ALPINE_VERSION_KEY=io.github.achelesstech.php-base.alpine-version
 
 digest_of() {
-    docker buildx imagetools inspect "$1" --format '{{json .Manifest}}' | jq -re '.digest'
+    local raw
+    raw="$(index_of "$1")" || return 1
+    digest_of_index "$raw"
 }
 
-# published_digest_of REF: like digest_of, but prints nothing (and succeeds)
+# published_index_of REF: like index_of, but prints nothing (and succeeds)
 # when the registry says REF does not exist. Any other error is passed on.
-published_digest_of() {
+published_index_of() {
     local out err status=0
     err="$(mktemp)"
-    out="$(docker buildx imagetools inspect "$1" --format '{{json .Manifest}}' 2>"$err")" || status=$?
+    out="$(index_of "$1" 2>"$err")" || status=$?
     if (( status == 0 )); then
         rm -f "$err"
-        jq -re '.digest' <<<"$out"
+        printf '%s\n' "$out"
         return
     fi
     local message
@@ -78,10 +82,11 @@ rebuild=()
 reasons='{}'
 while IFS= read -r line; do
     published="${IMAGE}:${line}"
-    published_digest="$(published_digest_of "$published")"
-    if [[ -n "$published_digest" ]]; then
-        labels="$(docker buildx imagetools inspect "${published}@${published_digest}" --format '{{json .Image}}' \
-            | jq -c '."linux/amd64".config.Labels // {}')"
+    published_index="$(published_index_of "$published")"
+    published_digest=""
+    if [[ -n "$published_index" ]]; then
+        published_digest="$(digest_of_index "$published_index")"
+        labels="$(amd64_image "$IMAGE" "$published_index" | jq -c '.config.Labels // {}')"
     else
         warn "${published} does not exist yet: building PHP ${line}."
         labels='{}'

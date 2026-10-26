@@ -33,6 +33,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 # shellcheck source=scripts/lib/guards.sh
 source scripts/lib/guards.sh
+# shellcheck source=scripts/lib/registry.sh
+source scripts/lib/registry.sh
 
 ONLY=""
 INCLUDE_EOL=0
@@ -59,7 +61,9 @@ IMAGE="$(jq -r '.image' versions.json)"
 PLATFORMS="$(jq -c '.platforms' versions.json)"
 
 digest_of() {
-    docker buildx imagetools inspect "$1" --format '{{json .Manifest}}' | jq -r '.digest'
+    local raw
+    raw="$(index_of "$1")" || return 1
+    digest_of_index "$raw"
 }
 
 # hub_tag_exists TAG — 0 if achelesstech/php-base:TAG is on Docker Hub, 1 if
@@ -116,9 +120,10 @@ while IFS= read -r entry; do
     [[ -n "$max_size_mb" ]] || { error "versions.json: PHP ${line} has no max_size_mb"; exit 1; }
 
     if [[ "$prerelease" == true ]]; then upstream="php:${line}-rc-fpm-alpine"; else upstream="php:${line}-fpm-alpine"; fi
-    digest="$(digest_of "$upstream")"
-    php_version="$(docker buildx imagetools inspect "${upstream}@${digest}" --format '{{json .Image}}' \
-        | jq -r '."linux/amd64".config.Env[] | select(startswith("PHP_VERSION=")) | sub("^PHP_VERSION="; "")')"
+    upstream_index="$(index_of "$upstream")"
+    digest="$(digest_of_index "$upstream_index")"
+    php_version="$(amd64_image "${upstream%%:*}" "$upstream_index" \
+        | jq -r '.config.Env[] | select(startswith("PHP_VERSION=")) | sub("^PHP_VERSION="; "")')"
     # Which Alpine is inside? Read it from the image itself. (The Hub tags API
     # is no shortcut: docker-library pushes the floating and the patch tags as
     # separate indexes, so their digests do not match.)
@@ -146,7 +151,7 @@ while IFS= read -r entry; do
 
     guard_fail=""
     if [[ "$prerelease" == true ]]; then
-        if docker buildx imagetools inspect "php:${line}-fpm-alpine" >/dev/null 2>&1; then
+        if index_of "php:${line}-fpm-alpine" >/dev/null 2>&1; then
             warn "php:${line}-fpm-alpine exists: PHP ${line} has gone GA, but versions.json still marks it prerelease."
         fi
     else

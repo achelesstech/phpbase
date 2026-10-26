@@ -43,10 +43,25 @@ check "only pending = 3"           "apk-upgrades" "$P1"   "$P1"     "$A1"      "
 check "PHP and Alpine both differ" "php-image"    "$P2"   "$P1"     "$A2"      "$A1"        0
 
 # ── check-upstream.sh against a stub `docker` (no network) ──────────────────
-# The stub answers imagetools for the published tags, php:* and alpine:*, with
-# labels that match upstream, and `docker run` with no pending upgrades. One
-# published tag can be made missing (STUB_MISSING + STUB_MISSING_MSG) or
-# fail some other way (STUB_OUTAGE, with STUB_OUTAGE_MSG or a 429 by default).
+# The stub answers `imagetools inspect --raw` for the published tags, php:* and
+# alpine:* with a two-platform index, `--format` for the linux/amd64 entry with
+# labels that match upstream, and `docker run` with no pending upgrades. It
+# refuses `--format` on anything else: on an index that costs Docker Hub a
+# pull per entry (scripts/lib/registry.sh). One published tag can be made
+# missing (STUB_MISSING + STUB_MISSING_MSG) or fail some other way
+# (STUB_OUTAGE, with STUB_OUTAGE_MSG or a 429 by default).
+AMD64=sha256:a64a64a64a64a64a64a64a64a64a64a64a64a64a64a64a64a64a64a64a64a64a
+index() {   # index NAME: a two-platform index, distinct per NAME
+    printf '{"manifests":[{"digest":"%s","platform":{"os":"linux","architecture":"amd64"}},{"digest":"sha256:%s","platform":{"os":"linux","architecture":"arm64"}}],"name":"%s"}' \
+        "$AMD64" "$(printf '%064d' 0)" "$1"
+}
+PHP_INDEX="$(index php)"
+ALPINE_INDEX="$(index alpine)"
+PUBLISHED_INDEX="$(index published)"
+sha() { printf '%s' "$1" | sha256sum | awk '{ print "sha256:" $1 }'; }
+PHP_NOW="$(sha "$PHP_INDEX")"
+ALPINE_NOW="$(sha "$ALPINE_INDEX")"
+
 stub_dir="$(mktemp -d)"
 trap 'rm -rf "$stub_dir"' EXIT
 cat >"$stub_dir/docker" <<STUB
@@ -54,7 +69,8 @@ cat >"$stub_dir/docker" <<STUB
 set -euo pipefail
 case "\$1" in
     run) exit 0 ;;
-    buildx) ref="\$4" fmt="\$6" ;;
+    buildx)
+        if [[ "\$4" == --raw ]]; then ref="\$5" fmt=raw; else ref="\$4" fmt="\$6"; fi ;;
     *) echo "stub docker: unexpected \$*" >&2; exit 99 ;;
 esac
 if [[ -n "\${STUB_MISSING:-}" && "\$ref" == "\${STUB_IMAGE}:\${STUB_MISSING}" ]]; then
@@ -63,17 +79,19 @@ fi
 if [[ -n "\${STUB_OUTAGE:-}" && "\$ref" == "\${STUB_IMAGE}:\${STUB_OUTAGE}" ]]; then
     echo "\${STUB_OUTAGE_MSG:-ERROR: unexpected status from HEAD request to https://registry-1.docker.io/v2/x/manifests/y: 429 Too Many Requests}" >&2; exit 1
 fi
-if [[ "\$fmt" == *.Manifest* ]]; then
+if [[ "\$fmt" == raw ]]; then
     case "\$ref" in
-        php:*)    echo '{"digest":"$P1"}' ;;
-        alpine:*) echo '{"digest":"$A1"}' ;;
-        *)        echo '{"digest":"sha256:dddd"}' ;;
+        php:*)    echo '$PHP_INDEX' ;;
+        alpine:*) echo '$ALPINE_INDEX' ;;
+        *)        echo '$PUBLISHED_INDEX' ;;
     esac
+elif [[ "\$ref" == *"@$AMD64" ]]; then
+    echo '{"config":{"Labels":{
+        "io.github.achelesstech.php-base.upstream-digest":"$PHP_NOW",
+        "org.opencontainers.image.base.digest":"$ALPINE_NOW",
+        "io.github.achelesstech.php-base.alpine-version":"3.24.3"}}}'
 else
-    echo '{"linux/amd64":{"config":{"Labels":{
-        "io.github.achelesstech.php-base.upstream-digest":"$P1",
-        "org.opencontainers.image.base.digest":"$A1",
-        "io.github.achelesstech.php-base.alpine-version":"3.24.3"}}}}'
+    echo "stub docker: --format \$fmt on \$ref, not one platform's manifest: a pull per index entry" >&2; exit 98
 fi
 STUB
 chmod +x "$stub_dir/docker"
