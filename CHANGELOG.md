@@ -149,6 +149,8 @@ v1 need changes before they work. Every change and what to do about it is in
   `letsencrypt` HTTP-01, cert-expiry checks, an explicit 90s backend idle
   timeout, a read-only Docker socket proxy) and Portainer
   ([`examples/README.md`](examples/README.md)).
+- The app templates pin the 8.4 base images by digest to a published build,
+  so a copied template builds as is; its `renovate.json` keeps them current.
 - New docs: [`docs/image.md`](docs/image.md),
   [`docs/security.md`](docs/security.md),
   [`docs/publishing.md`](docs/publishing.md),

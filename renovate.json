@@ -44,7 +44,7 @@
       "automerge": false
     },
     {
-      "description": "php-base and app-image references in the examples are placeholders for the project that copies them (whose own renovate.json maintains them), not dependencies of this repo",
+      "description": "php-base digests in the examples pin a published build so a copied example builds as is; the copied project's own renovate.json keeps them current. App-image references are placeholders. Neither is a dependency of this repo",
       "matchFileNames": ["examples/**"],
       "matchDatasources": ["docker"],
       "matchPackageNames": ["docker.io/achelesstech/**", "achelesstech/**"],

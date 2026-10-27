@@ -51,31 +51,34 @@ curl -fsS https://downloads.wordpress.org/release/wordpress-X.Y.Z.tar.gz.sha1
 deploy, then run `migrate` (below). wp-cli is pinned the same way
 (`WP_CLI_VERSION`, `WP_CLI_SHA512`).
 
-## 2. Pin the two base digests
+## 2. The two base digests
 
-The Dockerfile starts with two arguments, each pinned by digest:
+The Dockerfile starts with two arguments, each pinned by digest to a published
+build of the 8.4 line, so the site image builds as copied:
 
 ```dockerfile
-ARG PHP_BASE_IMAGE=docker.io/achelesstech/php-base:8.4@sha256:<runtime>
-ARG PHP_BASE_DEV_IMAGE=docker.io/achelesstech/php-base:8.4-dev@sha256:<dev>
+ARG PHP_BASE_IMAGE=docker.io/achelesstech/php-base:8.4@sha256:…
+ARG PHP_BASE_DEV_IMAGE=docker.io/achelesstech/php-base:8.4-dev@sha256:…
 ```
 
-Fill in the current digests:
+`:8.4` alone would change the site image whenever the base is rebuilt, and
+last week's build could not be reproduced. A tag-only reference still builds
+when you need one:
+`docker build --build-arg PHP_BASE_IMAGE=docker.io/achelesstech/php-base:8.4 …`.
+
+**Renovate** (`renovate.json`) keeps both digests current in one PR, every
+Monday. That PR is the CVE patch path: the base is rebuilt weekly. It never
+moves the PHP line (8.4 → 8.5); change both tags by hand for that. It also keeps the
+MariaDB digest current, within 11.4.
+
+A fresh copy starts on the build this template pins, which may be weeks old:
+let Renovate's first PR land before the first deploy, or read the current
+digests by hand:
 
 ```bash
 docker buildx imagetools inspect docker.io/achelesstech/php-base:8.4     --format '{{.Manifest.Digest}}'
 docker buildx imagetools inspect docker.io/achelesstech/php-base:8.4-dev --format '{{.Manifest.Digest}}'
 ```
-
-The image builds only once both are filled in. `:8.4` alone would change the
-site image whenever the base is rebuilt, and last week's build could not be
-reproduced. A tag-only reference still builds when you need one:
-`docker build --build-arg PHP_BASE_IMAGE=docker.io/achelesstech/php-base:8.4 …`.
-
-**Renovate** (`renovate.json`) then keeps both digests current in one PR, every
-Monday. That PR is the CVE patch path: the base is rebuilt weekly. It never
-moves the PHP line (8.4 → 8.5); change both tags by hand for that. It also
-keeps the MariaDB digest current, within 11.4.
 
 ## 3. Local development
 

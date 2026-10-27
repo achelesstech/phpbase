@@ -158,8 +158,10 @@ it. Re-enable them under *Actions*.
 
 It runs before 06:00 on Mondays. PHP and Alpine are deliberately not in it:
 the resolver takes the newest digests on every run. The `php-base` and
-app-image references in `examples/` are switched off: they are placeholders,
-kept current by the copied project's own `renovate.json`.
+app-image references in `examples/` are switched off. The `php-base` digests
+pin a published build, so a copied example builds as is, and the copied
+project's own `renovate.json` keeps them current. The app-image references
+are placeholders.
 
 `ignorePaths` (`**/node_modules/**`, `.work/**`, `.cache/**`) replaces the
 recommended preset's list, which would skip `examples/` and `test/`. Drop it,

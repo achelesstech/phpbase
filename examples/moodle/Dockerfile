@@ -18,8 +18,8 @@
 # A tag-only reference (--build-arg PHP_BASE_IMAGE=…:8.4) builds as well.
 # =============================================================================
 
-ARG PHP_BASE_IMAGE=docker.io/achelesstech/php-base:8.4@sha256:<runtime>
-ARG PHP_BASE_DEV_IMAGE=docker.io/achelesstech/php-base:8.4-dev@sha256:<dev>
+ARG PHP_BASE_IMAGE=docker.io/achelesstech/php-base:8.4@sha256:e0c4e55351bb18b0bd3d695d9b397128d79992dac719375f1f2b72e17bae5e02
+ARG PHP_BASE_DEV_IMAGE=docker.io/achelesstech/php-base:8.4-dev@sha256:92c1680fd525ac39e5297c23b051e64e5551c7bbf08a1262948052a1a3fd05f5
 
 # =============================================================================
 # source — the Moodle tree with its Composer dependencies
