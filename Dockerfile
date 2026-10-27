@@ -95,6 +95,9 @@ ARG UPLOADPROGRESS_VERSION=2.0.2
 # sees it and does not install and purge $PHPIZE_DEPS again for every extension.
 # Unpinned apk versions and the unquoted $PHPIZE_DEPS are intentional — see
 # .hadolint.yaml.
+#
+# Each tarball is saved to a file before it is unpacked, so curl can retry a
+# dropped transfer from the start; into a pipe it cannot.
 RUN set -eux -o pipefail; \
     apk add --no-cache --virtual .phpize-deps \
         $PHPIZE_DEPS \
@@ -128,8 +131,10 @@ RUN set -eux -o pipefail; \
     do \
         name="${spec%%:*}"; \
         mkdir -p "/usr/src/php/ext/${name}"; \
-        curl -fsSL "https://pecl.php.net/get/${name}-${spec#*:}.tgz" \
-            | tar -xz -C "/usr/src/php/ext/${name}" --strip-components=1; \
+        curl -fsSL --retry 5 --retry-all-errors -o "/tmp/${name}.tgz" \
+            "https://pecl.php.net/get/${name}-${spec#*:}.tgz"; \
+        tar -xzf "/tmp/${name}.tgz" -C "/usr/src/php/ext/${name}" --strip-components=1; \
+        rm "/tmp/${name}.tgz"; \
     done; \
     \
     docker-php-ext-configure gd --with-freetype --with-jpeg --with-webp --with-avif; \
@@ -214,8 +219,10 @@ RUN set -eux -o pipefail; \
     for spec in "xdebug:${XDEBUG_VERSION}" "pcov:${PCOV_VERSION}"; do \
         name="${spec%%:*}"; \
         mkdir -p "/usr/src/php/ext/${name}"; \
-        curl -fsSL "https://pecl.php.net/get/${name}-${spec#*:}.tgz" \
-            | tar -xz -C "/usr/src/php/ext/${name}" --strip-components=1; \
+        curl -fsSL --retry 5 --retry-all-errors -o "/tmp/${name}.tgz" \
+            "https://pecl.php.net/get/${name}-${spec#*:}.tgz"; \
+        tar -xzf "/tmp/${name}.tgz" -C "/usr/src/php/ext/${name}" --strip-components=1; \
+        rm "/tmp/${name}.tgz"; \
         if ! docker-php-ext-install -j"$(nproc)" "${name}"; then \
             [ "$ALLOW_MISSING_DEV_EXTENSIONS" = 1 ] || exit 1; \
             echo "WARNING: ${name} ${spec#*:} does not build on PHP ${PHP_VERSION}; left out of this dev image"; \

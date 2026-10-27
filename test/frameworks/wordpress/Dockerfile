@@ -5,11 +5,14 @@ ARG BASE_IMAGE
 ARG BASE_DEV_IMAGE
 FROM ${BASE_IMAGE}
 ARG WP_VERSION=latest
-# `curl | tar` below must fail when curl does: pipefail (no SHELL instruction).
+# Downloads are saved to files, so curl can retry a dropped transfer from the
+# start; into a pipe it cannot.
 USER root
-RUN set -eux -o pipefail; \
-    curl -fsSL "https://wordpress.org/wordpress-${WP_VERSION}.tar.gz" | tar xz --strip-components=1 -C /var/www/html; \
-    curl -fsSL -o /usr/local/bin/wp https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar; \
+RUN set -eux; \
+    curl -fsSL --retry 5 --retry-all-errors -o /tmp/wordpress.tgz "https://wordpress.org/wordpress-${WP_VERSION}.tar.gz"; \
+    tar xzf /tmp/wordpress.tgz --strip-components=1 -C /var/www/html; \
+    rm /tmp/wordpress.tgz; \
+    curl -fsSL --retry 5 --retry-all-errors -o /usr/local/bin/wp https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar; \
     chmod 0755 /usr/local/bin/wp; \
     chown -R root:root /var/www/html; \
     install -d -o www-data -g www-data /var/www/html/wp-content/uploads; \

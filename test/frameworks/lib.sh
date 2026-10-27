@@ -32,11 +32,14 @@ docker network create --label "$FW_LABEL" "$FW_NET" >/dev/null
 
 # fw_build <tag> <context-dir> [--build-arg …] — also passes BASE_DEV_IMAGE,
 # the -dev twin of $IMAGE, which the fixtures' composer stages build FROM.
+# A failed build is tried once more: it downloads the app (release tarballs,
+# Composer packages), and one dropped download must not block a release.
 fw_build() {
     local tag="$1" dir="$2"; shift 2
     set -- --build-arg "BASE_DEV_IMAGE=${IMAGE}-dev" "$@"
     FW_IMAGES+=("$tag")
-    if docker build --quiet "$@" -t "$tag" "$dir" >/dev/null; then
+    if docker build --quiet "$@" -t "$tag" "$dir" >/dev/null \
+        || { printf '  note  app image build failed; trying once more\n'; docker build --quiet "$@" -t "$tag" "$dir" >/dev/null; }; then
         ok "app image builds (root-owned code, preset vhost, nginx-validate.sh)"
     else
         bad "app image build failed"; docker build "$@" -t "$tag" "$dir" 2>&1 | tail -30; exit 1

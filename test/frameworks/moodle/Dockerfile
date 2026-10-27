@@ -6,11 +6,14 @@ ARG BASE_DEV_IMAGE
 # its vendor/ installed in a stage built FROM it.
 FROM ${BASE_DEV_IMAGE} AS build
 ARG MOODLE_BRANCH=503
-# `curl | tar` below must fail when curl does: pipefail (no SHELL instruction).
+# The tarball is saved to a file before it is unpacked, so curl can retry a
+# dropped transfer from the start (one dropped in CI); into a pipe it cannot.
 USER root
-RUN set -eux -o pipefail; \
-    curl -fsSL "https://packaging.moodle.org/stable${MOODLE_BRANCH}/moodle-latest-${MOODLE_BRANCH}.tgz" \
-        | tar xz --strip-components=1 -C /var/www/html; \
+RUN set -eux; \
+    curl -fsSL --retry 5 --retry-all-errors -o /tmp/moodle.tgz \
+        "https://packaging.moodle.org/stable${MOODLE_BRANCH}/moodle-latest-${MOODLE_BRANCH}.tgz"; \
+    tar xzf /tmp/moodle.tgz --strip-components=1 -C /var/www/html; \
+    rm /tmp/moodle.tgz; \
     chown -R www-data:www-data /var/www/html
 # 5.1+ tarballs ship no complete vendor/; the environment check fails without it.
 USER www-data
