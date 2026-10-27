@@ -33,7 +33,6 @@ client ──TLS──► Cloudflare ──TLS──► Traefik ──plain HTTP
 | [`docs/traefik/vps-setup.md`](../../docs/traefik/vps-setup.md) | bare VPS to serving traffic, in order |
 | [`docs/traefik/static-config.md`](../../docs/traefik/static-config.md) | every static property, and why |
 | [`docs/traefik/labels.md`](../../docs/traefik/labels.md) | the labels an app repo needs |
-| [`docs/traefik/audit-previous-config.md`](../../docs/traefik/audit-previous-config.md) | what changed from the previous config, what was broken, and what was verified |
 
 The static/dynamic split is not stylistic. Traefik reads `traefik.yml` once at
 process start and cannot reload it; the file provider watches `dynamic/` and

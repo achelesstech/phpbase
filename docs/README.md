@@ -28,7 +28,6 @@ For the edge proxy in [`examples/traefik/`](../examples/traefik/).
 | [`traefik/vps-setup.md`](traefik/vps-setup.md) | a bare VPS to serving traffic, in order |
 | [`traefik/static-config.md`](traefik/static-config.md) | every static property, and why |
 | [`traefik/labels.md`](traefik/labels.md) | the labels an app repository needs |
-| [`traefik/audit-previous-config.md`](traefik/audit-previous-config.md) | what changed from the previous config, what was broken, and what was verified |
 
 ## Portainer
 
@@ -37,10 +36,3 @@ For the container UI in [`examples/portainer/`](../examples/portainer/).
 | Document | What it covers |
 |---|---|
 | [`portainer/audit-docker-run.md`](portainer/audit-docker-run.md) | what was wrong with the official `docker run` install, and why each change was made |
-
-## Design records
-
-| Document | What it covers |
-|---|---|
-| [`superpowers/specs/2026-10-24-php-base-v2-design.md`](superpowers/specs/2026-10-24-php-base-v2-design.md) | the php-base v2 design |
-| [`superpowers/plans/2026-10-25-php-base-v2.md`](superpowers/plans/2026-10-25-php-base-v2.md) | the php-base v2 implementation plan |

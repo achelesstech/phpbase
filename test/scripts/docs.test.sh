@@ -71,7 +71,7 @@ has_line() {
 # ── docs/migrating-from-v1.md ───────────────────────────────────────────────
 mig=docs/migrating-from-v1.md
 must "$mig" php-base-web /etc/supervisor php-fpm.sock 8081 -dev NGINX_ACCESS_LOG NGINX_GZIP pgrep PHP_BASE_STRICT \
-    supervisord SCHEDULER_COMMAND WORKER_COMMAND 'fastcgi_pass php_fpm' fastcgi-php.conf health.conf \
+    supervisord SCHEDULER_COMMAND WORKER_COMMAND 'fastcgi_pass php_fpm' fastcgi-php.conf \
     php.ini-production php.ini-development HOME FarmBook HQ
 
 # The entrypoint's supervisord error sends people to this exact file.
@@ -103,7 +103,7 @@ if [[ "$breaking" == "- "* || "$breaking" == "1. "* ]]; then
 else
     bad "${cl}: 'Breaking changes' is a list"
 fi
-# PROPOSAL.md and VERIFICATION.md live only in the ignored .work/prototype/.
+# PROPOSAL.md and VERIFICATION.md were prototype files and were never tracked.
 must_not "$cl" PROPOSAL.md VERIFICATION.md 'v2 (proposal)'
 
 # ── v1 health advice ────────────────────────────────────────────────────────

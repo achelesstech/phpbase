@@ -11,8 +11,7 @@
 # then does everything else get its down signal. php-fpm forwards its SIGQUIT
 # to every worker at once, which interrupts a request in progress (PHP's
 # sleep() returns early, blocking reads see EINTR), so it must not happen while
-# nginx still has requests open. The prototype's supervisord stopped in the
-# same order, through priorities.
+# nginx still has requests open.
 # =============================================================================
 SCAN=/tmp/php-base/s6/scan
 

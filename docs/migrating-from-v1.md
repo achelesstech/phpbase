@@ -112,16 +112,12 @@ could send `X-Forwarded-For: 127.0.0.1`.
 - v1 vhosts defined their own `location = /fpm-ping` (and status) blocks
   with `fastcgi_pass 127.0.0.1:9000`. They still pass `nginx -t`, but they
   point at the old TCP address and re-open the ACL bypass.
-- An image built on the unreleased v2 prototype may
-  `include /etc/nginx/php-base/health.conf;`. That file is gone, so
-  `nginx -t` fails.
 - `HEALTHCHECK_PORT=8080` points the healthcheck at the public port, where
   `/fpm-ping` no longer exists, so the container never becomes healthy.
 - A monitoring sidecar that scraped `/fpm-status` over the network can't reach
   8081.
 
-**What to do.** Delete the status `location` blocks (and a prototype's
-`health.conf` include) and any
+**What to do.** Delete the status `location` blocks and any
 `HEALTHCHECK_PORT`/`HEALTHCHECK_PATH` override. Read status from inside the
 container:
 
