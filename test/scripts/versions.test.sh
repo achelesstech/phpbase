@@ -10,10 +10,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
-want='[{"line":"8.2","frameworks":{"laravel":["laravel/laravel:^12.0"],"wordpress":["latest"],"moodle":["MOODLE_501_STABLE"]}},
- {"line":"8.3","frameworks":{"laravel":["laravel/laravel:^12.0","laravel/laravel:^13.0"],"drupal":["drupal/recommended-project:^11"],"wordpress":["latest"],"moodle":["MOODLE_502_STABLE","MOODLE_503_STABLE"]}},
- {"line":"8.4","frameworks":{"laravel":["laravel/laravel:^12.0","laravel/laravel:^13.0"],"drupal":["drupal/recommended-project:^11"],"wordpress":["latest"],"moodle":["MOODLE_501_STABLE","MOODLE_502_STABLE","MOODLE_503_STABLE"]}},
- {"line":"8.5","frameworks":{"laravel":["laravel/laravel:^12.0","laravel/laravel:^13.0"],"drupal":["drupal/recommended-project:^11"],"wordpress":["latest"]}}]'
+want='[{"line":"8.2","frameworks":{"wordpress":["latest"]}},
+ {"line":"8.3","frameworks":{"laravel":["laravel/laravel:^13.0"],"drupal":["drupal/recommended-project:^11"],"wordpress":["latest"],"moodle":["MOODLE_503_STABLE"]}},
+ {"line":"8.4","frameworks":{"laravel":["laravel/laravel:^13.0"],"drupal":["drupal/recommended-project:^11"],"wordpress":["latest"],"moodle":["MOODLE_503_STABLE"]}},
+ {"line":"8.5","frameworks":{"laravel":["laravel/laravel:^13.0"],"drupal":["drupal/recommended-project:^11"],"wordpress":["latest"]}}]'
 want="$(jq -c . <<<"$want")"
 got="$(jq -c '[.php[] | {line, frameworks}]' versions.json)"
 

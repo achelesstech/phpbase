@@ -54,7 +54,7 @@ The repo also holds starting-point examples that get copied into new projects: a
 |---|---|---|
 | G1 | **Latest.** Every build uses the newest PHP patch of 8.2/8.3/8.4/8.5 and the newest Alpine the official PHP image ships, with every Alpine package upgraded | Resolver output; guard rails (§7.11) fail or warn when it isn't true |
 | G2 | **Fast security uptake.** A new upstream PHP image, a new Alpine base image, or a pending Alpine package update is rebuilt within ~6 hours | `watch-upstream.yml` runs every 6 h (§6b C3) |
-| G3 | **Fits the four frameworks.** Laravel 12/13, Drupal 11, Moodle 5.1–5.3, WordPress 7.x | Framework smoke tests in CI, per `versions.json` |
+| G3 | **Fits the four frameworks.** Laravel 13, Drupal 11, Moodle 5.3, WordPress 7.x | Framework smoke tests in CI, per `versions.json` |
 | G4 | **Secure.** Details below the table | Runtime test suite (§7.10), run under the hardened flags |
 | G5 | **Small.** 8.4 runtime **≤ 180 MB** uncompressed on amd64 (prototype: 239 MB), with no extension dropped | Per-line size ceilings in tests and CI (§6b C5) |
 | G6 | **Performant behind Traefik.** No keep-alive race, no double compression, no duplicate access log, sane nginx worker count, FPM sized from the memory limit, healthy within a few seconds | Runtime tests |
@@ -252,10 +252,10 @@ A builder check of this document raised these points. **They are the author's ca
 │   └── superpowers/              specs/, plans/
 └── examples/
     ├── README.md
-    ├── laravel/                  Laravel 13 (Laravel 12 by changing one constraint)
+    ├── laravel/                  Laravel 13
     ├── drupal/                   Drupal 11
     ├── wordpress/
-    ├── moodle/                   Moodle 5.3 LTS (5.2 by changing one line)
+    ├── moodle/                   Moodle 5.3 LTS
     ├── traefik/                  the host's edge proxy, improved (§7.13)
     └── portainer/
 ```
@@ -574,16 +574,16 @@ Test: a web container becomes healthy within 15 s of start.
 - the socket, the internal listener, no `pgrep`;
 - scheduler commands run through `php-base-every`.
 
-They run on the lines listed in `versions.json`. A framework's value can be a list (§6b C4). The matrix:
+They run on the lines listed in `versions.json`. A framework's value can be a list (§6b C4). The matrix has one version per framework, the one the sites run:
 
 | Line | Laravel | Drupal | WordPress | Moodle |
 |---|---|---|---|---|
-| 8.2 | ^12 | — | latest | 5.1 |
-| 8.3 | ^12, ^13 | ^11 | latest | 5.2, 5.3 |
-| 8.4 | ^12, ^13 | ^11 | latest | 5.1, 5.2, 5.3 |
-| 8.5 | ^12, ^13 | ^11 | latest | — (Moodle doesn't support 8.5) |
+| 8.2 | — | — | latest | — |
+| 8.3 | ^13 | ^11 | latest | 5.3 |
+| 8.4 | ^13 | ^11 | latest | 5.3 |
+| 8.5 | ^13 | ^11 | latest | — (Moodle doesn't support 8.5) |
 
-The examples' line, 8.4, therefore tests everything the examples offer.
+Laravel 13, Drupal 11 and Moodle 5.3 need PHP 8.3, so 8.2 tests only WordPress. The examples' line, 8.4, tests everything the examples offer. Until 2026-10-27 the matrix also had Laravel 12 and Moodle 5.1 and 5.2.
 
 ### 7.11 CI and automation
 
@@ -702,10 +702,10 @@ There are no `ports:` and no `pgrep` healthchecks.
 
 | Example | Base | Specifics |
 |---|---|---|
-| `laravel` | 8.4 | Laravel 13 (`laravel/laravel:^13.0`; one constraint changes it to 12). Preset `laravel.conf`. Framework caches baked at build time, as in the current template. Volume `storage/app`. Queue: `php artisan queue:work --max-time=3600`. Scheduler: `php artisan schedule:run` through `php-base-every`. `HEALTHCHECK_URL=http://127.0.0.1:8080/up` |
+| `laravel` | 8.4 | Laravel 13 (`laravel/laravel:^13.0`). Preset `laravel.conf`. Framework caches baked at build time, as in the current template. Volume `storage/app`. Queue: `php artisan queue:work --max-time=3600`. Scheduler: `php artisan schedule:run` through `php-base-every`. `HEALTHCHECK_URL=http://127.0.0.1:8080/up` |
 | `drupal` | 8.4 | `drupal/recommended-project:^11`. Preset `drupal.conf`. Env-driven `settings.php`, with `trusted_host_patterns` from `APP_DOMAIN` and no reverse-proxy settings, because nginx already sets `REMOTE_ADDR`. Volumes for public and private files. Scheduler: `vendor/bin/drush cron` |
 | `wordpress` | 8.4 | A deployment repo: the core version is downloaded at build. Preset `wordpress.conf`. Env-driven `wp-config.php` with `DISALLOW_FILE_MODS=true` (code is immutable) and `DISABLE_WP_CRON=true`. Scheduler: `wp cron event run --due-now`. Volume `wp-content/uploads`. MariaDB 11.4 |
-| `moodle` | 8.4 | A deployment repo, `MOODLE_503_STABLE`; one line switches it to `MOODLE_502_STABLE`. Preset `moodle.conf` (`public/` layout). Env-driven `config.php` with `$CFG->getremoteaddrconf = 3`. Volume moodledata. `NGINX_FASTCGI_READ_TIMEOUT=600s` and `FPM_REQUEST_TERMINATE_TIMEOUT=600s`. Upload limits documented. Scheduler: `php public/admin/cli/cron.php`. PostgreSQL 18. The old template's `MOODLE_RUN_CRON` hook, which wrote supervisor config, is gone |
+| `moodle` | 8.4 | A deployment repo, `MOODLE_503_STABLE`. Preset `moodle.conf` (`public/` layout). Env-driven `config.php` with `$CFG->getremoteaddrconf = 3`. Volume moodledata. `NGINX_FASTCGI_READ_TIMEOUT=600s` and `FPM_REQUEST_TERMINATE_TIMEOUT=600s`. Upload limits documented. Scheduler: `php public/admin/cli/cron.php`. PostgreSQL 18. The old template's `MOODLE_RUN_CRON` hook, which wrote supervisor config, is gone |
 
 The prototype's `test/frameworks/*/Dockerfile` files are proven working references for each framework's build steps.
 

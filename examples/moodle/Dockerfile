@@ -26,8 +26,8 @@ ARG PHP_BASE_DEV_IMAGE=docker.io/achelesstech/php-base:8.4-dev@sha256:<dev>
 # =============================================================================
 FROM ${PHP_BASE_DEV_IMAGE} AS source
 
-# The Moodle branch. MOODLE_503_STABLE is 5.3 LTS; MOODLE_502_STABLE is 5.2.
-# Both use the public/ layout the moodle.conf preset serves (5.1+).
+# The Moodle branch. MOODLE_503_STABLE is 5.3 LTS, the version the base
+# image's tests install; it uses the public/ layout moodle.conf serves.
 ARG MOODLE_BRANCH=MOODLE_503_STABLE
 # MOODLE_503_STABLE -> 503: the packaging server's name for the branch.
 ARG MOODLE_PKG=${MOODLE_BRANCH#MOODLE_}

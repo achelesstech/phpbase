@@ -3,7 +3,7 @@
 # test/frameworks/run.sh — run the smoke tests versions.json lists for a line
 # =============================================================================
 #   test/frameworks/run.sh <base-image> '<frameworks-json>'
-#   test/frameworks/run.sh php-base:test '{"laravel":["laravel/laravel:^12.0","laravel/laravel:^13.0"],"moodle":["MOODLE_503_STABLE"]}'
+#   test/frameworks/run.sh php-base:test '{"laravel":["laravel/laravel:^13.0"],"moodle":["MOODLE_503_STABLE"]}'
 #
 # Each framework's value is a list of versions, one run each (a plain string
 # is a list of one). Runs are labelled "<framework> (<version>)".

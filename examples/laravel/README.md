@@ -32,9 +32,6 @@ This replaces Laravel's own `.env.example` with this one, which holds the
 settings the containers need. Commit `package-lock.json`: without it the image
 build falls back to `npm install` and the assets are not reproducible.
 
-For Laravel 12, change one constraint: `laravel/laravel:^12.0` (or
-`laravel/framework:^12.0` in an existing app). Nothing else here differs.
-
 ## 2. Pin the two base digests
 
 The Dockerfile starts with two arguments, each pinned by digest:

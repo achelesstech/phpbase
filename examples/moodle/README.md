@@ -36,17 +36,11 @@ cp .env.example .env                 # then fill it in (below)
 
 ### Moodle version
 
-The Dockerfile builds `MOODLE_503_STABLE` (5.3 LTS). One line switches it to
-5.2:
-
-```dockerfile
-ARG MOODLE_BRANCH=MOODLE_502_STABLE
-```
-
-Both branches use the `public/` layout the preset serves, and keep the CLI
-scripts in `admin/cli/`, outside the docroot. The build takes the newest
-weekly build of the branch; `build-app.yml` rebuilds every Tuesday to pick up
-Moodle's fixes. After a new image, run `migrate` (below).
+The Dockerfile builds `MOODLE_503_STABLE` (5.3 LTS), the version the base
+image's tests install. It uses the `public/` layout the preset serves, and
+keeps the CLI scripts in `admin/cli/`, outside the docroot. The build takes
+the newest weekly build of the branch; `build-app.yml` rebuilds every Tuesday
+to pick up Moodle's fixes. After a new image, run `migrate` (below).
 
 ### Plugins
 

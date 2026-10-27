@@ -129,8 +129,8 @@ v1 need changes before they work. Every change and what to do about it is in
   tagged. Publishing is per PHP line, so one failing line never blocks the
   others.
 - Every build runs the runtime suite under the hardened flags, the `-dev`
-  suite, a size ceiling per line, real Laravel, Drupal, WordPress and Moodle
-  installs, and Trivy.
+  suite, a size ceiling per line, real Laravel 13, Drupal 11, WordPress and
+  Moodle 5.3 installs on every line that supports them, and Trivy.
 - cosign keyless signatures, an SBOM and provenance (`mode=max`). Actions are
   pinned by SHA. A failing scheduled run opens a GitHub issue.
 - `lint.yml` runs `scripts/lint.sh` (also `make lint`) on every push and pull

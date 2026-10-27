@@ -2,8 +2,8 @@
 
 A PHP base image: **PHP-FPM and nginx on Alpine, supervised by s6**, non-root,
 built to sit behind a TLS-terminating reverse proxy (Traefik, optionally with
-Cloudflare in front). One image serves Laravel 12/13, Drupal 11, WordPress and
-Moodle 5.1–5.3.
+Cloudflare in front). One image serves Laravel 13, Drupal 11, WordPress and
+Moodle 5.3.
 
 ```
 Traefik (TLS) ──► :8080 ┌──────────────────────────────────────────────────┐

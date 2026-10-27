@@ -9,7 +9,7 @@ boots and scans it once it lives in your repository.
 | [`laravel/`](laravel/) | a Laravel 13 app: copy it into the app repository, next to your code | `php-base:8.4`; `laravel.conf` preset; app, queue, scheduler; PostgreSQL 18 |
 | [`drupal/`](drupal/) | a Drupal 11 site (`drupal/recommended-project`): copy it into the site repository | `php-base:8.4`; `drupal.conf` preset; app, scheduler (`drush cron`); PostgreSQL 18 |
 | [`wordpress/`](wordpress/) | a deployment repository: core is downloaded at build; your themes and plugins live here | `php-base:8.4`; `wordpress.conf` preset; app, scheduler (WP-Cron); MariaDB 11.4 |
-| [`moodle/`](moodle/) | a deployment repository for Moodle 5.3 LTS (one line switches to 5.2): the release is downloaded at build | `php-base:8.4`; `moodle.conf` preset; app, scheduler (cron); PostgreSQL 18 |
+| [`moodle/`](moodle/) | a deployment repository for Moodle 5.3 LTS: the release is downloaded at build | `php-base:8.4`; `moodle.conf` preset; app, scheduler (cron); PostgreSQL 18 |
 | [`traefik/`](traefik/) | the edge proxy for the host: TLS, both certificate resolvers, middlewares, a read-only Docker socket proxy | once per host; every app above sits behind it |
 | [`portainer/`](portainer/) | Portainer CE behind Traefik, with no published ports | once per host, optional |
 
