@@ -9,8 +9,9 @@ name: build-base
 #   :8.4.27                                floating within a patch release
 #   :8.4.27-20261026 (or .2, .3, …)        one per build (rollback, audit)
 #   …-dev / :latest-dev                    the same + Xdebug, PCOV, git
-#   :8.6-rc  :8.6-rc-dev                   pre-release canary (never :8.6);
-#                                          allowed to fail, tagged only on a pass
+#   :X.Y-rc  :X.Y-rc-dev                   a "prerelease" line's canary (never
+#                                          :X.Y); allowed to fail, tagged only
+#                                          on a pass. None is listed now.
 #
 # Flow:  resolve ─► build (line × arch, native runners) ─► publish (per line) ─► guards
 #   resolve   pin every upstream input to a digest and pick a build tag

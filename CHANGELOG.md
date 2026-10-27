@@ -33,8 +33,8 @@ v1 need changes before they work. Every change and what to do about it is in
   `/etc/php-runtime.d/` and `php-fpm.d/zz-runtime.conf` are gone;
   `/etc/php-base-release` is now `/etc/php-base/release`.
 - **New tags.** `X.Y`, `X.Y.Z`, `X.Y.Z-YYYYMMDD` (`.N` for a second build
-  that day), `latest`, a `-dev` twin of each, and `8.6-rc` / `8.6-rc-dev`
-  for the canary. v1's `X.Y-<run number>` tags are not continued, and there
+  that day), `latest`, and a `-dev` twin of each. v1's `X.Y-<run number>`
+  tags are not continued, and there
   are no `X.Y-alpineA.B` tags: a tag tied to one Alpine release stops
   getting PHP updates.
 - **Behaviour you will notice**, each with a variable to restore it:
@@ -84,8 +84,9 @@ v1 need changes before they work. Every change and what to do about it is in
 
 ### Image
 
-- PHP 8.2, 8.3, 8.4 and 8.5, plus an 8.6 release-candidate canary, all built
-  from `versions.json`, on native amd64 and arm64.
+- PHP 8.2, 8.3, 8.4 and 8.5, all built from `versions.json`, on native amd64
+  and arm64. 8.6 is added when it is released: its release candidates do not
+  yet build the PECL extensions.
 - A `-dev` variant: Composer 2, git, Xdebug and PCOV (both off), PHP sources
   and `phpize`, so an app can compile its own extension.
 - Extensions added: gmp, sockets, igbinary, memcached and uploadprogress.

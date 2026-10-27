@@ -44,7 +44,6 @@ where they belong:
 | `achelesstech/php-base:8.4.27-20261026` | one build. Never moves. A second build on the same day gets `…-20261026.2` |
 | `achelesstech/php-base:8.4-dev` | the `-dev` twin of `:8.4`; every tag above has one (`:8.4.27-dev`, …) |
 | `achelesstech/php-base:latest` | the newest stable line (8.5); `:latest-dev` is its twin. Not for production |
-| `achelesstech/php-base:8.6-rc` | the pre-release canary, published only when it builds and passes; `:8.6-rc-dev` |
 
 Stable lines are 8.2, 8.3, 8.4 and 8.5. **PHP 8.2's security support ends
 2026-12-31**; CI stops building it after that date. There are no

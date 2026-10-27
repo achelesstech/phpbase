@@ -16,7 +16,6 @@ frameworks before anything is tagged.
 | `8.4.27-20261026` | one build; never moves (a second build that day is `8.4.27-20261026.2`) |
 | `…-dev` | every tag has a `-dev` twin: Composer, git, Xdebug and PCOV (both off), PHP sources and `phpize`. For local development and `composer install` build stages |
 | `latest`, `latest-dev` | the newest stable line (8.5). Not for production |
-| `8.6-rc`, `8.6-rc-dev` | the pre-release canary, when it builds and passes |
 
 There are no `-alpine3.x` tags: a tag pinned to one Alpine release stops
 receiving PHP updates. PHP 8.2's security support ends 2026-12-31.

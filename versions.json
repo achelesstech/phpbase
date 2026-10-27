@@ -64,13 +64,6 @@
         "drupal": ["drupal/recommended-project:^11"],
         "wordpress": ["latest"]
       }
-    },
-    {
-      "line": "8.6",
-      "max_size_mb": 198,
-      "eol": "2030-12-31",
-      "prerelease": true,
-      "frameworks": {}
     }
   ]
 }

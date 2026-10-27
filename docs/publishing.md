@@ -108,8 +108,12 @@ resolve ─► build (line × arch, native runners) ─► publish (per line) �
    dispatch (`trigger` defaults to `manual`) opens no issue, because whoever
    started it is watching.
 
-The 8.6 release candidate is a canary: its failure doesn't fail the run, and
-it is tagged (`8.6-rc`, `8.6-rc-dev`) only when it passes.
+A line marked `"prerelease": true` in `versions.json` is a canary: built
+from `php:X.Y-rc-fpm-alpine`, its failure doesn't fail the run, and it is
+tagged (`X.Y-rc`, `X.Y-rc-dev`) only when it passes. None is listed now:
+8.6 is added as a normal line when PHP 8.6.0 is released (until then its
+PECL extensions do not build). The resolver warns once php.net supports a
+branch `versions.json` does not list.
 
 ## The watcher: rebuilds within 6 hours
 
