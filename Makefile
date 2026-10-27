@@ -9,6 +9,8 @@
 #   make build-all                every line in versions.json
 #   make test                     behaviour tests (runtime + dev)
 #   make test-frameworks          Laravel/Drupal/WordPress/Moodle smoke tests
+#   make test-examples            the examples/ apps and Traefik, end to end
+#   make test-examples EXAMPLES='laravel traefik-routing'
 #   make resolve                  what CI would build right now (digests, tags)
 #   make lint | scan | shell
 #
@@ -22,8 +24,9 @@ IMAGE      ?= local/php-base
 PHP_ALL    ?= $(shell jq -r '.php[] | select((.prerelease // false) | not) | .line' versions.json)
 TAG        := $(IMAGE):$(PHP)
 DEV_TAG    := $(IMAGE):$(PHP)-dev
+EXAMPLES   ?=
 
-.PHONY: build build-all test test-frameworks resolve lint scan shell clean
+.PHONY: build build-all test test-frameworks test-examples resolve lint scan shell clean
 
 # Pinned inputs from the resolver (cached per day; REFRESH=1 re-resolves).
 # Resolved once, so runtime and dev get the identical argument list.
@@ -45,6 +48,11 @@ test-frameworks: build
 	@fw="$$(jq -ce --arg l '$(PHP)' '.php[] | select(.line == $$l) | .frameworks' versions.json)" \
 		|| { echo "PHP $(PHP) is not a line in versions.json" >&2; exit 1; }; \
 	set -x; ./test/frameworks/run.sh '$(TAG)' "$$fw"
+
+# Every test/examples/*.sh (EXAMPLES picks some) on the $(PHP) build. An app
+# example that versions.json doesn't list for $(PHP) is skipped.
+test-examples: build
+	PHP_BASE_IMAGE='$(TAG)' PHP_BASE_DEV_IMAGE='$(DEV_TAG)' ./test/examples/run.sh '$(PHP)' $(EXAMPLES)
 
 resolve:
 	./scripts/resolve-matrix.sh | sed -n 's/^lines=//p' | jq '.[] | {line, php_version, alpine_full, alpine_image, build_tag, tags}'

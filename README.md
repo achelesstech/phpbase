@@ -141,6 +141,7 @@ make build PHP=8.5
 make build-all          # every line in versions.json
 make test               # the runtime suite (hardened flags) and the dev suite
 make test-frameworks    # real Laravel, Drupal, WordPress and Moodle installs
+make test-examples      # each examples/ app and Traefik, booted and checked
 make resolve            # what CI would build right now: digests and tags
 make lint               # scripts/lint.sh: linters, compose config, links, unit tests
 make scan               # Trivy, HIGH/CRITICAL
